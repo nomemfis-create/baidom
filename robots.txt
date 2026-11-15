@@ -1,0 +1,3 @@
+User-agent: *
+Allow: /
+Sitemap: https://nomemfis-create.github.io/baidom/sitemap.xml
