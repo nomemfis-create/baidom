@@ -60,7 +60,7 @@ if (window.BDGlass) BDGlass.watch([[header, 30, 'blur(10px) saturate(1.7) bright
 
 // длинные слова в заголовках («первоначального») целиком помещаются в строку — даже при крупном системном шрифте
 // Android: если слово шире колонки, заголовок уменьшается ровно настолько, чтобы оно влезло
-const fitEls = Array.from(document.querySelectorAll('.sec-head h2, .ip-text h2, .foot h2, .card h3, .step h2'));
+const fitEls = Array.from(document.querySelectorAll('.hero h1, .sec-head h2, .ip-text h2, .foot h2, .card h3, .step h2'));
 function fitHeads() {
   // системное увеличение шрифта домножает и заданный нами размер — узнаём его коэффициент на пробном элементе
   const probe = document.createElement('i');

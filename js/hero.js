@@ -159,7 +159,7 @@ function scrollProgress() {
 let hudStage = -2;
 const roCache = {};
 function setRO(k, v) { if (roCache[k] !== v) { roCache[k] = v; RO[k].textContent = v; } }
-function hud(p) {
+function hud(p, p3 = p) {
   let s = -1;
   for (let i = 0; i < BOUNDS.length; i++) if (p >= BOUNDS[i]) s = i;
   if (s !== hudStage) {
@@ -168,15 +168,21 @@ function hud(p) {
   }
   railFill.style.transform = mobileQ.matches ? `scaleX(${p.toFixed(4)})` : `scaleY(${p.toFixed(4)})`;
   hintEl.classList.toggle('off', p > 0.012);
-  setRO('bricks', '≈ ' + fmt(BRICKS * sg(p, 'walls')) + ' шт');
-  setRO('roof', fmt(ROOF_AREA * easeIO(sg(p, 'roof'))) + ' м²');
-  setRO('wins', fmt(N_WIN * sg(p, 'win')) + ' шт');
+  setRO('bricks', '≈ ' + fmt(BRICKS * sg(p3, 'walls')) + ' шт');
+  setRO('roof', fmt(ROOF_AREA * easeIO(sg(p3, 'roof'))) + ' м²');
+  setRO('wins', fmt(N_WIN * sg(p3, 'win')) + ' шт');
   topEl.classList.toggle('solid', build.getBoundingClientRect().bottom < 90);
 }
 railItems.forEach((li, i) => li.querySelector('button').addEventListener('click', () => {
   const top = build.getBoundingClientRect().top + scrollY;
   scrollTo({ top: top + (BOUNDS[i] + 0.04) * (build.offsetHeight - innerHeight), behavior: 'smooth' });
 }));
+
+// Автопостройка: на первом экране дом строится сам, без прокрутки (чертёж → стены → крыша → вечер),
+// и камера за это время опускается с вида сверху до финального ракурса. Стоит начать листать —
+// 3D и камера плавно переходят на этапы по прокрутке (дом «отматывается» к чертежу и строится заново).
+const DEMO = { start: 2300, dur: 6500, end: 0.985 };       // мс после появления 3D; до какого этапа
+let demoT0 = -1, camBlend = 1, camDemoK = 1, camScrollP = 0, lastHK = '';
 
 // один цикл на всё: прогресс сглаживается, текст и шкала живут сразу, 3D подключается, когда готово
 let render3D = null, pS = forcedP ?? scrollProgress(), lastT = performance.now(), heroT0 = -1;
@@ -189,9 +195,19 @@ function uiLoop(now) {
   pS = forcedP !== null ? pT : lerp(pS, pT, 1 - Math.exp(-dt * 4.5));
   if (Math.abs(pS - pT) < 1e-4) pS = pT;
   if (heroT0 < 0) heroT0 = now;
-  hud(pS);
+  let p3 = pS;                                              // прогресс стройки для 3D и счётчиков
+  camScrollP = pS; camBlend = 1;
+  if (render3D && forcedP === null) {
+    if (demoT0 < 0) demoT0 = now;
+    camDemoK = sstep(clamp((now - demoT0 - DEMO.start) / DEMO.dur));
+    camBlend = sstep(seg(pS, 0.004, 0.06));                 // 0 — первый экран, 1 — листают этапы
+    p3 = lerp(lerp(BOUNDS[0], DEMO.end, camDemoK), pS, camBlend);
+  }
+  const hk = (1 - camBlend).toFixed(3);                     // «первый экран»: шкала этапов проявляется, когда начинают листать
+  if (hk !== lastHK) { stageEl.style.setProperty('--hk', hk); lastHK = hk; }
+  hud(pS, p3);
   textScrub(pS, REDUCED ? 1 : sstep(clamp((now - heroT0 - 120) / 1500)));
-  if (render3D) render3D(pS, now, rawDt);
+  if (render3D) render3D(p3, now, rawDt);
 }
 requestAnimationFrame(uiLoop);
 function webglOK() {
@@ -1490,7 +1506,23 @@ void main(){
     return o;
   }
 
-  let VW = 1, VH = 1, distK = 1, dpr = 2, wide = true;
+  const CAM_TOP = { az: 14, el: 58, d: 46, tx: 0, ty: 0, tz: 0 }, CAM_END = camAt(0.99);
+  function camMix() {
+    const k = easeIO(camDemoK), s = camAt(camScrollP), o = {};
+    for (const key of KEYS) o[key] = lerp(lerp(CAM_TOP[key], CAM_END[key], k), s[key], camBlend);
+    return o;
+  }
+
+  let VW = 1, VH = 1, distK = 1, dpr = 2, wide = true, baseOX = 0, baseOY = 0, viewOff = '';
+  // hk — «первый экран» (0…1): дом правее текста (на телефоне — выше текста), камера чуть дальше
+  function setView(hk) {
+    const ox = baseOX - (wide ? VW * 0.11 * hk : 0), oy = baseOY + (wide ? 0 : VH * 0.07 * hk);
+    const key = ox.toFixed(1) + ',' + oy.toFixed(1);
+    if (key === viewOff) return;
+    viewOff = key;
+    camera.setViewOffset(VW, VH, ox, oy, VW, VH);
+    camera.updateProjectionMatrix();
+  }
   function resize() {
     VW = stageEl.clientWidth; VH = stageEl.clientHeight;
     dpr = Math.min(dpr, devicePixelRatio || 1, VW < 760 ? 1.6 : 2);
@@ -1498,9 +1530,10 @@ void main(){
     camera.aspect = VW / VH;
     const asp = VW / VH;
     wide = asp >= 1.15 && VW > 760;
-    if (wide) camera.setViewOffset(VW, VH, -VW * (qs.has('vx') ? parseFloat(qs.get('vx')) : 0.13), 0, VW, VH);   // ?vx= — только для отладки кадра
-    else camera.setViewOffset(VW, VH, 0, VH * (asp < 0.8 ? 0.1 : 0.15), VW, VH);
-    camera.updateProjectionMatrix();
+    baseOX = wide ? -VW * (qs.has('vx') ? parseFloat(qs.get('vx')) : 0.13) : 0;   // ?vx= — только для отладки кадра
+    baseOY = wide ? 0 : VH * (asp < 0.8 ? 0.1 : 0.15);
+    viewOff = '';                                      // пересчитать сдвиг кадра в следующем кадре
+    setView(0);
     distK = asp < 0.6 ? 1.85 : asp < 0.8 ? 1.6 : asp < 1.15 ? 1.3 : asp < 1.5 ? 1.12 : 1.0;
   }
   resize();
@@ -1583,12 +1616,14 @@ void main(){
     renderer.toneMappingExposure = lerp(1.0, 0.95, L);
 
     // камера
-    const c = camAt(p);
+    const c = camMix();
     const idle = REDUCED ? 0 : Math.sin(now * 0.00012) * 1.4;
     const intro = 1 - easeOut(draw);
     const az = THREE.MathUtils.degToRad(c.az + mx * 3.0 + idle - intro * 6);
     const el = THREE.MathUtils.degToRad(c.el - my * 1.8 + intro * 6);
-    const dd = (c.d + intro * 6) * distK;
+    const hk = 1 - camBlend;
+    setView(hk);
+    const dd = (c.d + intro * 6) * distK * (1 + (wide ? 0.28 : 0.34) * hk);
     camera.position.set(c.tx + Math.sin(az) * Math.cos(el) * dd, c.ty + Math.sin(el) * dd, c.tz + Math.cos(az) * Math.cos(el) * dd);
     camera.lookAt(c.tx, c.ty, c.tz);
     camera.updateMatrixWorld();
