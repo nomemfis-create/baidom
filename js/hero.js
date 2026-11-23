@@ -1540,9 +1540,15 @@ void main(){
   let VW = 1, VH = 1, distK = 1, dpr = 2, wide = true, baseOX = 0, baseOY = 0, viewOff = '';
   // hk — «первый экран» (0…1): дом правее текста (на телефоне — выше текста), камера чуть дальше
   // полоса между шапкой и текстом первого экрана; дом на телефоне вписывается в неё по высоте и ширине
-  let bandC = 0, zoomFit = 1;
+  let bandC = 0, zoomFit = 1, bandCX = 0, zoomFitW = 1.28;
   function measureBand() {
-    if (wide) { zoomFit = 1; return; }
+    if (wide) {                                            // компьютер: дом — в полосе справа от текста (ноутбуки ~1000–1280 px тоже)
+      const sr = stageEl.getBoundingClientRect(), hr = heroEl.getBoundingClientRect();
+      const left = hr.right - sr.left + 48, right = VW - 70;
+      bandCX = (left + right) / 2;
+      zoomFitW = Math.max(1.12 * VH / (0.95 * Math.max(200, right - left)), 1.05);
+      viewOff = ''; return;
+    }
     const sr = stageEl.getBoundingClientRect(), hr = heroEl.getBoundingClientRect();
     const topH = parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--top-h')) || 68;
     const top = topH + 30, bot = Math.max(top + 90, hr.top - sr.top - 2);
@@ -1551,7 +1557,7 @@ void main(){
     viewOff = '';
   }
   function setView(hk) {
-    const ox = baseOX - (wide ? VW * 0.11 * hk : 0), oy = wide ? baseOY : lerp(baseOY, VH / 2 - bandC, hk);
+    const ox = wide ? lerp(baseOX, VW / 2 - bandCX, hk) : baseOX, oy = wide ? baseOY : lerp(baseOY, VH / 2 - bandC, hk);
     const key = ox.toFixed(1) + ',' + oy.toFixed(1);
     if (key === viewOff) return;
     viewOff = key;
@@ -1663,7 +1669,7 @@ void main(){
     const el = THREE.MathUtils.degToRad(c.el - my * 1.8 + intro * 6 + orbEl * hkO);
     const hk = 1 - camBlend;
     setView(hk);
-    const dd = (c.d + intro * 6) * distK * (wide ? 1 + 0.28 * hk : lerp(1, zoomFit, hk));
+    const dd = (c.d + intro * 6) * distK * lerp(1, wide ? zoomFitW : zoomFit, hk);
     camera.position.set(c.tx + Math.sin(az) * Math.cos(el) * dd, c.ty + Math.sin(el) * dd, c.tz + Math.cos(az) * Math.cos(el) * dd);
     camera.lookAt(c.tx, c.ty, c.tz);
     camera.updateMatrixWorld();
