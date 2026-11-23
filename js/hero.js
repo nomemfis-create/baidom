@@ -142,8 +142,8 @@ TXT.forEach((t) => { t.k = -1; t.x = -1; t.vis = null; });
 function textScrub(p, heroIn) {
   for (const t of TXT) {
     let k, x;
-    if (t.a < 0) { k = heroIn; x = sstep(seg(p, 0.002, 0.03)); }
-    else { k = sstep(seg(p, t.a - 0.004, t.a + 0.034)); x = t.b > 1 ? 0 : sstep(seg(p, t.b - 0.032, t.b + 0.002)); }
+    if (t.a < 0) { k = heroIn; x = sstep(seg(p, 0.002, 0.024)); }
+    else { k = sstep(seg(p, t.a + 0.003, t.a + 0.036)); x = t.b > 1 ? 0 : sstep(seg(p, t.b - 0.03, t.b - 0.004)); }
     if (Math.abs(k - t.k) > 0.0004 || Math.abs(x - t.x) > 0.0004) {
       t.el.style.setProperty('--k', k.toFixed(4)); t.el.style.setProperty('--x', x.toFixed(4)); t.k = k; t.x = x;
     }
@@ -184,6 +184,10 @@ railItems.forEach((li, i) => li.querySelector('button').addEventListener('click'
 const DEMO = { start: 2300, dur: 6500, end: 0.985 };       // мс после появления 3D; до какого этапа
 let demoT0 = -1, camBlend = 1, camDemoK = 1, camScrollP = 0, lastHK = '';
 
+// интро (текст, чертёж, автопостройка) начинается, когда ушёл загрузчик
+const isLoaded = () => document.documentElement.classList.contains('bd-loaded');
+let builtSent = false;
+
 // один цикл на всё: прогресс сглаживается, текст и шкала живут сразу, 3D подключается, когда готово
 let render3D = null, pS = forcedP ?? scrollProgress(), lastT = performance.now(), heroT0 = -1;
 heroEl.style.setProperty('--k', '0');
@@ -194,29 +198,31 @@ function uiLoop(now) {
   const pT = forcedP ?? scrollProgress();
   pS = forcedP !== null ? pT : lerp(pS, pT, 1 - Math.exp(-dt * 4.5));
   if (Math.abs(pS - pT) < 1e-4) pS = pT;
-  if (heroT0 < 0) heroT0 = now;
+  if (heroT0 < 0 && isLoaded()) heroT0 = now;
   let p3 = pS;                                              // прогресс стройки для 3D и счётчиков
   camScrollP = pS; camBlend = 1;
-  if (render3D && forcedP === null) {
+  if (render3D && forcedP === null && isLoaded()) {
     if (demoT0 < 0) demoT0 = now;
     camDemoK = sstep(clamp((now - demoT0 - DEMO.start) / DEMO.dur));
     camBlend = sstep(seg(pS, 0.004, 0.06));                 // 0 — первый экран, 1 — листают этапы
     p3 = lerp(lerp(BOUNDS[0], DEMO.end, camDemoK), pS, camBlend);
+    if (camDemoK >= 1 && !builtSent) { builtSent = true; document.dispatchEvent(new Event('bd:built')); }   // дом достроен — можно листать варианты
   }
   const hk = (1 - camBlend).toFixed(3);                     // «первый экран»: шкала этапов проявляется, когда начинают листать
-  if (hk !== lastHK) { stageEl.style.setProperty('--hk', hk); lastHK = hk; }
+  if (hk !== lastHK) { stageEl.style.setProperty('--hk', hk); stageEl.classList.toggle('scrolled', camBlend > 0.5); lastHK = hk; }
   hud(pS, p3);
-  textScrub(pS, REDUCED ? 1 : sstep(clamp((now - heroT0 - 120) / 1500)));
-  if (render3D) render3D(p3, now, rawDt);
+  textScrub(pS, heroT0 < 0 ? 0 : REDUCED ? 1 : sstep(clamp((now - heroT0 - 120) / 1500)));
+  if (render3D && isLoaded()) render3D(p3, now, rawDt);
 }
 requestAnimationFrame(uiLoop);
 function webglOK() {
   try { const c = document.createElement('canvas'); return !!c.getContext('webgl2'); } catch (e) { return false; }
 }
 function start() {
-  if (!window.THREE || !webglOK()) { document.body.classList.add('no3d'); return; }
+  if (!window.THREE || !webglOK()) { document.body.classList.add('no3d'); document.dispatchEvent(new Event('bd:ready')); return; }
   try { render3D = init3D(window.THREE); }
   catch (e) { console.error('[БАЙДОМ] 3D не запустилось:', e); document.body.classList.add('no3d'); }
+  document.dispatchEvent(new Event('bd:ready'));          // загрузчик уходит
 }
 // сцену собираем, когда заголовок уже выехал: тяжёлая сборка не дёргает первую анимацию
 const go = () => setTimeout(start, 650);
@@ -251,6 +257,7 @@ function init3D(THREE) {
     bC: u(-9), kC: u(-9), wC: u(-9), aC: u(-9), pC: u(-9), mY: u(-1), lY: u(-1), eave: u(0),
     roofY: u(-10), membY: u(-10), soil: u(0), lawn: u(0), found: u(0), lights: u(0), time: u(0),
     lamps: u([new V3(0, -9, 0), new V3(0, -9, 0), new V3(0, -9, 0), new V3(0, -9, 0)]),
+    varA: u(new V3(1, 1, 1)), varB: u(new V3(1, 1, 1)), tintA: u(0), tintB: u(0), varT: u(0),
   };
   const SHARED = {
     FLOOR_Y: fl(FY), WALL_H: fl(WH),
@@ -549,15 +556,32 @@ float aoH(vec3 p){
   transformed *= step(0.0001, dk);
   transformed.y += (1.0 - de) * ${h.toFixed(2)};
   vFresh = 1.0 - smoothstep(0.0, 2.5, uBuild - aT - 1.3);`;
+  const VAR_HEAD = `
+uniform vec3 uVarA, uVarB; uniform float uTintA, uTintB, uVarT;
+float varY(float y){ return (y - FLOOR_Y) / WALL_H; }
+float varFront(){ return uVarT * 1.3 - 0.15; }
+vec3 varCol(vec3 c, vec3 tint, float use){
+  float l = dot(c, vec3(0.2126, 0.7152, 0.0722));
+  return mix(c, tint * clamp(l / 0.034, 0.55, 1.6), use);
+}
+vec3 varMix(vec3 c, float y){
+  float s = 1.0 - smoothstep(varFront() - 0.08, varFront() + 0.01, varY(y));
+  return mix(varCol(c, uVarA, uTintA), varCol(c, uVarB, uTintB), s);
+}
+float varEdge(float y){
+  return (1.0 - smoothstep(0.0, 0.022, abs(varY(y) - varFront()))) * step(0.001, uVarT) * step(uVarT, 0.999);
+}`;
   function masonryMat(tx, color, uBuild, key, dropH, opts = {}) {
     const { noUvOff, noAO, ...params } = opts;
     const m = pbr(tx, color, params);
+    const VAR = key === 'brick';                             // варианты фасада — только у облицовочного кирпича
     patch(m, 'bd-mas-' + key, {
-      defines: SHARED, uniforms: { uBuild, uEave: U.eave },
+      defines: SHARED,
+      uniforms: Object.assign({ uBuild, uEave: U.eave }, VAR ? { uVarA: U.varA, uVarB: U.varB, uTintA: U.tintA, uTintB: U.tintB, uVarT: U.varT } : {}),
       vHead: DROP_HEAD, vBegin: dropBegin(dropH), vUv: noUvOff ? '' : 'vUv += aUvOff;', vEnd: WP_END,
-      fHead: 'varying float vFresh;\n' + AO_HEAD,
-      fColor: noAO ? '' : 'diffuseColor.rgb *= aoH(vWP);',
-      fEmis: 'totalEmissiveRadiance += ACCENT_LIN * vFresh * 0.16;',
+      fHead: 'varying float vFresh;\n' + AO_HEAD + (VAR ? VAR_HEAD : ''),
+      fColor: (VAR ? 'diffuseColor.rgb = varMix(diffuseColor.rgb, vWP.y);\n' : '') + (noAO ? '' : 'diffuseColor.rgb *= aoH(vWP);'),
+      fEmis: 'totalEmissiveRadiance += ACCENT_LIN * vFresh * 0.16;' + (VAR ? '\ntotalEmissiveRadiance += ACCENT_LIN * varEdge(vWP.y) * 1.4;' : ''),
     });
     const dm = new THREE.MeshDepthMaterial({ depthPacking: THREE.RGBADepthPacking });
     patch(dm, 'bd-mas-d-' + key, { uniforms: { uBuild }, vHead: DROP_HEAD, vBegin: dropBegin(dropH) });
@@ -1515,8 +1539,19 @@ void main(){
 
   let VW = 1, VH = 1, distK = 1, dpr = 2, wide = true, baseOX = 0, baseOY = 0, viewOff = '';
   // hk — «первый экран» (0…1): дом правее текста (на телефоне — выше текста), камера чуть дальше
+  // полоса между шапкой и текстом первого экрана; дом на телефоне вписывается в неё по высоте и ширине
+  let bandC = 0, zoomFit = 1;
+  function measureBand() {
+    if (wide) { zoomFit = 1; return; }
+    const sr = stageEl.getBoundingClientRect(), hr = heroEl.getBoundingClientRect();
+    const topH = parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--top-h')) || 68;
+    const top = topH + 30, bot = Math.max(top + 90, hr.top - sr.top - 2);
+    bandC = (top + bot) / 2;
+    zoomFit = Math.max(0.74 * VH / (0.98 * VW), 0.5 * VH / (bot - top), 0.85);
+    viewOff = '';
+  }
   function setView(hk) {
-    const ox = baseOX - (wide ? VW * 0.11 * hk : 0), oy = baseOY + (wide ? 0 : VH * 0.07 * hk);
+    const ox = baseOX - (wide ? VW * 0.11 * hk : 0), oy = wide ? baseOY : lerp(baseOY, VH / 2 - bandC, hk);
     const key = ox.toFixed(1) + ',' + oy.toFixed(1);
     if (key === viewOff) return;
     viewOff = key;
@@ -1533,11 +1568,13 @@ void main(){
     baseOX = wide ? -VW * (qs.has('vx') ? parseFloat(qs.get('vx')) : 0.13) : 0;   // ?vx= — только для отладки кадра
     baseOY = wide ? 0 : VH * (asp < 0.8 ? 0.1 : 0.15);
     viewOff = '';                                      // пересчитать сдвиг кадра в следующем кадре
+    measureBand();
     setView(0);
     distK = asp < 0.6 ? 1.85 : asp < 0.8 ? 1.6 : asp < 1.15 ? 1.3 : asp < 1.5 ? 1.12 : 1.0;
   }
   resize();
   new ResizeObserver(resize).observe(stageEl);
+  new ResizeObserver(() => measureBand()).observe(heroEl);
   let mx = 0, my = 0, tmx = 0, tmy = 0;
   addEventListener('pointermove', (e) => { tmx = e.clientX / innerWidth * 2 - 1; tmy = e.clientY / innerHeight * 2 - 1; }, { passive: true });
   let onScreen = true;
@@ -1617,13 +1654,16 @@ void main(){
 
     // камера
     const c = camMix();
+    stepVariant(now);
+    orbAz = lerp(orbAz, orbAzT, 1 - Math.exp(-0.016 * 60 * 0.12)); orbEl = lerp(orbEl, orbElT, 1 - Math.exp(-0.016 * 60 * 0.12));
     const idle = REDUCED ? 0 : Math.sin(now * 0.00012) * 1.4;
     const intro = 1 - easeOut(draw);
-    const az = THREE.MathUtils.degToRad(c.az + mx * 3.0 + idle - intro * 6);
-    const el = THREE.MathUtils.degToRad(c.el - my * 1.8 + intro * 6);
+    const hkO = 1 - camBlend;                                     // осмотр — только на первом экране
+    const az = THREE.MathUtils.degToRad(c.az + mx * 3.0 + idle - intro * 6 + orbAz * hkO);
+    const el = THREE.MathUtils.degToRad(c.el - my * 1.8 + intro * 6 + orbEl * hkO);
     const hk = 1 - camBlend;
     setView(hk);
-    const dd = (c.d + intro * 6) * distK * (1 + (wide ? 0.28 : 0.34) * hk);
+    const dd = (c.d + intro * 6) * distK * (wide ? 1 + 0.28 * hk : lerp(1, zoomFit, hk));
     camera.position.set(c.tx + Math.sin(az) * Math.cos(el) * dd, c.ty + Math.sin(el) * dd, c.tz + Math.cos(az) * Math.cos(el) * dd);
     camera.lookAt(c.tx, c.ty, c.tz);
     camera.updateMatrixWorld();
@@ -1642,6 +1682,85 @@ void main(){
       if (Math.abs(lo - L2.o) > 0.01) { L2.el.style.opacity = lo.toFixed(2); L2.o = lo; }
     }
   }
+
+  // ============================================================
+  //  ВАРИАНТЫ ФАСАДА: кирпич, швы, кровля, рамы. Смена — волной снизу вверх (~1,8 с)
+  // ============================================================
+  const VARIANTS = [
+    { name: 'Классика', brick: null, mortar: '#5a5550', roof: '#34383c', trim: '#2a2e32' },
+    { name: 'Светлый', brick: '#c9a87c', mortar: '#d8d1c4', roof: '#62666b', trim: '#2a2e32' },
+    { name: 'Графит', brick: '#3c3e42', mortar: '#bdb7ad', roof: '#1f2225', trim: '#141517' },
+    { name: 'Терракота', brick: '#b2603a', mortar: '#d2c8b9', roof: '#4b2a20', trim: '#3a2a22' },
+  ];
+  const VC = VARIANTS.map((v) => ({
+    tint: v.brick ? (() => { const c = lin(v.brick); return new V3(c.r, c.g, c.b); })() : new V3(1, 1, 1), use: v.brick ? 1 : 0,
+    mortar: lin(v.mortar), roof: lin(v.roof), trim: lin(v.trim),
+  }));
+  let varCur = 0, varNext = 0, varT0 = -1;
+  const VAR_DUR = 1800;
+  function applyVarColors(k) {                             // кровля/швы/рамы догоняют волну по кирпичу
+    const a = VC[varCur], b = VC[varNext];
+    mortarMesh.material.color.copy(a.mortar).lerp(b.mortar, sstep(seg(k, 0.05, 0.8)));
+    anth.color.copy(a.trim).lerp(b.trim, sstep(seg(k, 0.3, 0.85)));
+    roofMat.color.copy(a.roof).lerp(b.roof, sstep(seg(k, 0.6, 1)));
+  }
+  function setVariant(i) {
+    i = ((i % VARIANTS.length) + VARIANTS.length) % VARIANTS.length;
+    if (varT0 >= 0) { varCur = varNext; applyVarColors(0); }   // предыдущая смена ещё шла — досрочно завершаем
+    if (i === varCur) { varT0 = -1; U.varT.value = 0; return; }
+    U.varA.value.copy(VC[varCur].tint); U.tintA.value = VC[varCur].use;
+    U.varB.value.copy(VC[i].tint); U.tintB.value = VC[i].use;
+    varNext = i; varT0 = -2;                               // старт — в ближайшем кадре
+    document.dispatchEvent(new CustomEvent('bd:variant', { detail: i }));
+  }
+  function stepVariant(now) {
+    if (varT0 === -1) return;
+    if (varT0 === -2) varT0 = now;
+    const k = clamp((now - varT0) / VAR_DUR);
+    U.varT.value = easeIO(k);
+    applyVarColors(k);
+    if (k >= 1) {
+      varCur = varNext; varT0 = -1; U.varT.value = 0;
+      U.varA.value.copy(VC[varCur].tint); U.tintA.value = VC[varCur].use;
+    }
+  }
+
+  // осмотр: дом можно повернуть мышью или пальцем (вбок; вертикальный свайп — прокрутка страницы)
+  let orbAz = 0, orbEl = 0, orbAzT = 0, orbElT = 0, drag = null;
+  canvas.style.touchAction = 'pan-y';
+  canvas.addEventListener('pointerdown', (e) => {
+    if (camBlend > 0.5) return;
+    drag = { x: e.clientX, y: e.clientY, az: orbAzT, el: orbElT, moved: false };
+  });
+  addEventListener('pointermove', (e) => {
+    if (!drag) return;
+    const dx = e.clientX - drag.x, dy = e.clientY - drag.y;
+    if (!drag.moved && Math.hypot(dx, dy) > 6) { drag.moved = true; document.dispatchEvent(new Event('bd:interact')); }
+    if (!drag.moved) return;
+    orbAzT = drag.az - dx * 0.28;
+    orbElT = clamp(drag.el + dy * 0.12, -14, 22);
+  }, { passive: true });
+  const endDrag = () => { drag = null; };
+  addEventListener('pointerup', endDrag); addEventListener('pointercancel', endDrag);
+
+  // снимок кадра для окна «Хочу такой дом» (берём сразу после отрисовки — без preserveDrawingBuffer)
+  let snapReq = null;
+  const _pv = new V3();
+  function houseRect() {                                   // где на кадре дом с деревьями (доли ширины/высоты)
+    let x0 = 1, x1 = 0, y0 = 1, y1 = 0;
+    for (const x of [OX - 2.5, OX + W + 2.5]) for (const y of [0, 7.5]) for (const z of [OZ - 2.5, OZ + D + 2.5]) {
+      _pv.set(x, y, z).project(camera);
+      const px = (_pv.x + 1) / 2, py = (1 - _pv.y) / 2;
+      x0 = Math.min(x0, px); x1 = Math.max(x1, px); y0 = Math.min(y0, py); y1 = Math.max(y1, py);
+    }
+    return { x0: clamp(x0), x1: clamp(x1), y0: clamp(y0), y1: clamp(y1) };
+  }
+  window.BD3D = {
+    variants: VARIANTS.map((v) => v.name),
+    get current() { return varT0 === -1 ? varCur : varNext; },
+    setVariant,
+    snapshot: () => new Promise((r) => { snapReq = r; }),
+  };
 
   // прогрев: всё видно и «построено», чтобы скомпилировать шейдеры до первого кадра
   U.bC.value = U.kC.value = U.wC.value = U.aC.value = U.pC.value = 99; U.roofY.value = U.membY.value = 99; U.mY.value = U.lY.value = 99;
@@ -1662,6 +1781,7 @@ void main(){
     apply(p, draw, now);
     if (p !== shadowP) { renderer.shadowMap.needsUpdate = true; shadowP = p; }
     renderer.render(scene, camera);
+    if (snapReq) { try { snapReq({ url: canvas.toDataURL('image/jpeg', 0.9), rect: houseRect() }); } catch (e) { snapReq(null); } snapReq = null; }
     ftN++;
     if (rawDt < 0.5) {
       ftAvg = lerp(ftAvg, rawDt * 1000, 0.08);
