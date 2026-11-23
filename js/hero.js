@@ -105,7 +105,7 @@ const BOUNDS = [0.03, 0.11, 0.25, 0.505, 0.725, 0.84];
 const build = $('#build'), stageEl = build.querySelector('.stage');
 const heroEl = $('#hero'), steps = $$('.step'), railItems = $$('#rail li'), railFill = $('#rail .fill');
 const hintEl = $('#hint'), topEl = $('#top');
-const RO = { bricks: $('[data-k="bricks"]'), roof: $('[data-k="roof"]'), wins: $('[data-k="wins"]') };
+const RO = { area: $('[data-k="area"]'), bricks: $('[data-k="bricks"]'), roof: $('[data-k="roof"]'), wins: $('[data-k="wins"]') };
 const mobileQ = matchMedia('(max-width: 760px)');
 
 function splitWords(el) {
@@ -168,9 +168,15 @@ function hud(p, p3 = p) {
   }
   railFill.style.transform = mobileQ.matches ? `scaleX(${p.toFixed(4)})` : `scaleY(${p.toFixed(4)})`;
   hintEl.classList.toggle('off', p > 0.012);
-  setRO('bricks', '≈ ' + fmt(BRICKS * sg(p3, 'walls')) + ' шт');
-  setRO('roof', fmt(ROOF_AREA * easeIO(sg(p3, 'roof'))) + ' м²');
-  setRO('wins', fmt(N_WIN * sg(p3, 'win')) + ' шт');
+  if (r118eff > 0.5 && H118stats) {
+    setRO('area', H118stats.area); setRO('bricks', '≈ ' + fmt(H118stats.bricks) + ' шт');
+    setRO('roof', fmt(H118stats.roof) + ' м²'); setRO('wins', fmt(H118stats.wins) + ' шт');
+  } else {
+    setRO('area', '101,01 м²');
+    setRO('bricks', '≈ ' + fmt(BRICKS * sg(p3, 'walls')) + ' шт');
+    setRO('roof', fmt(ROOF_AREA * easeIO(sg(p3, 'roof'))) + ' м²');
+    setRO('wins', fmt(N_WIN * sg(p3, 'win')) + ' шт');
+  }
   topEl.classList.toggle('solid', build.getBoundingClientRect().bottom < 90);
 }
 railItems.forEach((li, i) => li.querySelector('button').addEventListener('click', () => {
@@ -183,6 +189,34 @@ railItems.forEach((li, i) => li.querySelector('button').addEventListener('click'
 // 3D и камера плавно переходят на этапы по прокрутке (дом «отматывается» к чертежу и строится заново).
 const DEMO = { start: 2300, dur: 6500, end: 0.985 };       // мс после появления 3D; до какого этапа
 let demoT0 = -1, camBlend = 1, camDemoK = 1, camScrollP = 0, lastHK = '';
+
+// Два реальных проекта на первом экране: 101 (стройка по прокрутке) и 118 (отдельная модель).
+// 101 → 118: стройка 101 «отматывается» к чертежу, участок с газоном и деревьями остаётся; 118 вырастает снизу вверх.
+// 118 → 101: 118 уходит сверху вниз, 101 снова строится. При прокрутке к этапам всегда 101.
+let houseCur = 0, houseTo = 0, hsT0 = -1, hsPending = -1, heroP101 = DEMO.end, r118 = 0, r118eff = 0, H118stats = null;
+function setHouse(i) {
+  i = i ? 1 : 0;
+  if (!builtSent) return;
+  if (hsT0 !== -1) { hsPending = i; return; }
+  if (i === houseCur) return;
+  houseTo = i; hsT0 = -2;
+  document.dispatchEvent(new CustomEvent('bd:house', { detail: i }));
+}
+function stepHouse(now) {
+  if (hsT0 === -1) return;
+  if (hsT0 === -2) hsT0 = now;
+  const t = (now - hsT0) / 1000;
+  if (houseTo === 1) {
+    heroP101 = lerp(DEMO.end, 0.06, easeIO(clamp(t / 1.4)));
+    r118 = easeIO(clamp((t - 1.0) / 1.7));
+    if (t >= 2.75) { houseCur = 1; hsT0 = -1; }
+  } else {
+    r118 = 1 - easeIO(clamp(t / 0.9));
+    heroP101 = lerp(0.06, DEMO.end, easeIO(clamp((t - 0.55) / 2.3)));
+    if (t >= 2.9) { houseCur = 0; hsT0 = -1; heroP101 = DEMO.end; }
+  }
+  if (hsT0 === -1 && hsPending >= 0) { const q = hsPending; hsPending = -1; setHouse(q); }
+}
 
 // интро (текст, чертёж, автопостройка) начинается, когда ушёл загрузчик
 const isLoaded = () => document.documentElement.classList.contains('bd-loaded');
@@ -199,20 +233,24 @@ function uiLoop(now) {
   pS = forcedP !== null ? pT : lerp(pS, pT, 1 - Math.exp(-dt * 4.5));
   if (Math.abs(pS - pT) < 1e-4) pS = pT;
   if (heroT0 < 0 && isLoaded()) heroT0 = now;
-  let p3 = pS;                                              // прогресс стройки для 3D и счётчиков
+  stepHouse(now);
+  let p3 = pS, siteP = pS;                                              // прогресс стройки для 3D и счётчиков
   camScrollP = pS; camBlend = 1;
   if (render3D && forcedP === null && isLoaded()) {
     if (demoT0 < 0) demoT0 = now;
     camDemoK = sstep(clamp((now - demoT0 - DEMO.start) / DEMO.dur));
     camBlend = sstep(seg(pS, 0.004, 0.06));                 // 0 — первый экран, 1 — листают этапы
-    p3 = lerp(lerp(BOUNDS[0], DEMO.end, camDemoK), pS, camBlend);
+    const demoP = lerp(BOUNDS[0], DEMO.end, camDemoK);
+    const houseP = houseCur === 0 && hsT0 === -1 ? demoP : heroP101;
+    p3 = lerp(houseP, pS, camBlend); siteP = lerp(demoP, pS, camBlend);
     if (camDemoK >= 1 && !builtSent) { builtSent = true; document.dispatchEvent(new Event('bd:built')); }   // дом достроен — можно листать варианты
   }
+  r118eff = r118 * (1 - camBlend);
   const hk = (1 - camBlend).toFixed(3);                     // «первый экран»: шкала этапов проявляется, когда начинают листать
   if (hk !== lastHK) { stageEl.style.setProperty('--hk', hk); stageEl.classList.toggle('scrolled', camBlend > 0.5); lastHK = hk; }
   hud(pS, p3);
   textScrub(pS, heroT0 < 0 ? 0 : REDUCED ? 1 : sstep(clamp((now - heroT0 - 120) / 1500)));
-  if (render3D && isLoaded()) render3D(p3, now, rawDt);
+  if (render3D && isLoaded()) render3D(p3, now, rawDt, siteP);
 }
 requestAnimationFrame(uiLoop);
 function webglOK() {
@@ -257,7 +295,7 @@ function init3D(THREE) {
     bC: u(-9), kC: u(-9), wC: u(-9), aC: u(-9), pC: u(-9), mY: u(-1), lY: u(-1), eave: u(0),
     roofY: u(-10), membY: u(-10), soil: u(0), lawn: u(0), found: u(0), lights: u(0), time: u(0),
     lamps: u([new V3(0, -9, 0), new V3(0, -9, 0), new V3(0, -9, 0), new V3(0, -9, 0)]),
-    varA: u(new V3(1, 1, 1)), varB: u(new V3(1, 1, 1)), tintA: u(0), tintB: u(0), varT: u(0),
+    varA: u(new V3(1, 1, 1)), varB: u(new V3(1, 1, 1)), tintA: u(0), tintB: u(0), varT: u(0), bandA: u(0), bandB: u(0), clip118: u(-10),
   };
   const SHARED = {
     FLOOR_Y: fl(FY), WALL_H: fl(WH),
@@ -1036,6 +1074,7 @@ void main(){
   for (const m of [roof, membrane]) { m.castShadow = true; m.receiveShadow = true; scene.add(m); }
 
   const anth = new THREE.MeshStandardMaterial({ color: lin('#2a2e32'), roughness: 0.42, metalness: 0.35, envMapIntensity: 0.9 });
+  const frameMat = anth.clone();
   const soffitMat = new THREE.MeshStandardMaterial({ color: lin('#e4dfd6'), map: TX.soffit.map, normalMap: TX.soffit.normalMap, roughnessMap: TX.soffit.roughnessMap, roughness: 1 });
   const trim = new THREE.Group();
   {
@@ -1214,7 +1253,7 @@ void main(){
         doorLamp = { g, lampMat, local: new V3(-w / 2 - 0.32, 0.4, 0.7) };
         lightK = 1.0;
       }
-      const frameMesh = new THREE.Mesh(geoFrom(F), anth); frameMesh.castShadow = true; g.add(frameMesh);
+      const frameMesh = new THREE.Mesh(geoFrom(F), frameMat); frameMesh.castShadow = true; g.add(frameMesh);
       g.scale.y = 1e-3; g.visible = false;
       scene.add(g);
       windows.push({ g, glass, ang: Math.atan2(g.position.z, g.position.x), lightK });
@@ -1457,6 +1496,7 @@ void main(){
   [[-4.7, 7.25, 0.62], [-3.5, 7.4, 0.5], [3.4, 7.35, 0.55], [4.8, 7.2, 0.65], [7.3, 2.2, 0.55], [7.25, 0.9, 0.45]].forEach(([x, z, s], i) => {
     plant(leafTree({ h: s * 1.6, r: s, ry: s * 0.75, seed: 90 + i, mats: MATS.bush, bark: barkMat, n: 170, size: 0.36, light: BUSH_L, dark: BUSH_D, trunkR: 0.02 }), x, z, i);
   });
+  flora.slice(-2).forEach((f) => { f.side = true; });
 
   // ============================================================
   //  СВЕТ И НЕБО ДЛЯ ОТРАЖЕНИЙ
@@ -1591,14 +1631,15 @@ void main(){
   // ============================================================
   const tmp = new V3();
   let scrim = -1;
-  function apply(p, draw, now) {
+  function apply(p, draw, now, ps = p) {
     U.time.value = now / 1000;
     U.draw.value = draw * 1.02;
-    const planA = 1 - sg(p, 'planOut');
+    const q = Math.max(p, ps);                               // участок: газон, отмостка, деревья, вечер
+    const planA = 1 - sg(q, 'planOut');
     const kS = easeIO(sg(p, 'slab'));
     U.planA.value = planA;
     U.fillA.value = seg(draw, 0.55, 0.85) * 0.42 * planA * (1 - kS);
-    U.soil.value = sg(p, 'soil'); U.found.value = sg(p, 'found'); U.lawn.value = sg(p, 'lawn');
+    U.soil.value = sg(q, 'soil'); U.found.value = sg(p, 'found'); U.lawn.value = sg(q, 'lawn');
     grass.visible = U.lawn.value > 0;
 
     const kO = easeOut(sg(p, 'found')), kI = easeOut(sg(p, 'inner'));
@@ -1614,6 +1655,7 @@ void main(){
     U.lY.value = FY + clamp((front + 4) * CP, -0.1, WH);
     U.aC.value = sg(p, 'parts') * 45 - 0.5;
     brickMesh.visible = blockMesh.visible = woolMesh.visible = mortarMesh.visible = lintelMesh.visible = kW > 0;
+    band101.visible = kW > 0.995;
     aacMesh.visible = U.aC.value > -0.4;
 
     // кровля
@@ -1637,7 +1679,7 @@ void main(){
     gutters.visible = kG > 0; gutters.position.y = (1 - kG) * 0.6;
 
     // окна, участок, деревья, вечер
-    const kWn = sg(p, 'win'), L = sg(p, 'lights');
+    const kWn = sg(p, 'win'), L = sg(q, 'lights');
     U.lights.value = L;
     for (const wn of windows) {
       const k = clamp((kWn - wn.d) / 0.4);
@@ -1646,13 +1688,16 @@ void main(){
     }
     if (doorLamp) doorLamp.lampMat.emissiveIntensity = L * 3;
     porchLight.intensity = L * 2.6;
-    const kF = sg(p, 'fin');
+    const kF = sg(q, 'fin');
     site.visible = kF > 0; site.position.y = -0.12 * (1 - easeOut(kF));
     U.pC.value = kF * (PAVER_ROWS + 4) - 1;
     paverMesh.visible = kF > 0;
     bollards.forEach((b, i) => { const k = clamp((kF - 0.4 - i * 0.1) / 0.3); b.g.visible = k > 0; b.g.scale.setScalar(Math.max(1e-3, backOut(k))); b.capMat.emissiveIntensity = L * 2.5; });
-    const kT = sg(p, 'trees');
-    for (const f of flora) { const k = clamp((kT - f.d * 0.6) / 0.4); f.g.visible = k > 0; f.g.scale.setScalar(Math.max(1e-3, backOut(k))); }
+    const kT = sg(q, 'trees');
+    for (const f of flora) {
+      const k = clamp((kT - f.d * 0.6) / 0.4), hide = f.side ? 1 - r118eff : 1;   // кусты справа стоят там, где у 118 стена
+      f.g.visible = k > 0 && hide > 0.01; f.g.scale.setScalar(Math.max(1e-3, backOut(k) * hide));
+    }
     sun.intensity = lerp(1.8, 1.3, L);
     sun.color.copy(SUN_DAY).lerp(SUN_EVE, L);
     hemi.intensity = lerp(0.3, 0.22, L);
@@ -1661,15 +1706,13 @@ void main(){
     // камера
     const c = camMix();
     stepVariant(now);
-    orbAz = lerp(orbAz, orbAzT, 1 - Math.exp(-0.016 * 60 * 0.12)); orbEl = lerp(orbEl, orbElT, 1 - Math.exp(-0.016 * 60 * 0.12));
     const idle = REDUCED ? 0 : Math.sin(now * 0.00012) * 1.4;
     const intro = 1 - easeOut(draw);
-    const hkO = 1 - camBlend;                                     // осмотр — только на первом экране
-    const az = THREE.MathUtils.degToRad(c.az + mx * 3.0 + idle - intro * 6 + orbAz * hkO);
-    const el = THREE.MathUtils.degToRad(c.el - my * 1.8 + intro * 6 + orbEl * hkO);
+    const az = THREE.MathUtils.degToRad(c.az + mx * 3.0 + idle - intro * 6);
+    const el = THREE.MathUtils.degToRad(c.el - my * 1.8 + intro * 6);
     const hk = 1 - camBlend;
     setView(hk);
-    const dd = (c.d + intro * 6) * distK * lerp(1, wide ? zoomFitW : zoomFit, hk);
+    const dd = (c.d + intro * 6) * distK * lerp(1, wide ? zoomFitW : zoomFit, hk) * lerp(1, 1.12, r118eff);
     camera.position.set(c.tx + Math.sin(az) * Math.cos(el) * dd, c.ty + Math.sin(el) * dd, c.tz + Math.cos(az) * Math.cos(el) * dd);
     camera.lookAt(c.tx, c.ty, c.tz);
     camera.updateMatrixWorld();
@@ -1690,34 +1733,54 @@ void main(){
   }
 
   // ============================================================
-  //  ВАРИАНТЫ ФАСАДА: кирпич, швы, кровля, рамы. Смена — волной снизу вверх (~1,8 с)
+  //  ДОМ 101: ВАРИАНТЫ ФАСАДА. «Как в проекте» — песочный кирпич, белый пояс над окнами, светлая кровля, белые свесы.
+  //  Смена — волной снизу вверх (~1,8 с): кирпич и пояс по шейдеру, швы/свесы/рамы/кровля догоняют.
   // ============================================================
-  const VARIANTS = [
-    { name: 'Классика', brick: null, mortar: '#5a5550', roof: '#34383c', trim: '#2a2e32' },
-    { name: 'Светлый', brick: '#c9a87c', mortar: '#d8d1c4', roof: '#62666b', trim: '#2a2e32' },
-    { name: 'Графит', brick: '#3c3e42', mortar: '#bdb7ad', roof: '#1f2225', trim: '#141517' },
-    { name: 'Терракота', brick: '#b2603a', mortar: '#d2c8b9', roof: '#4b2a20', trim: '#3a2a22' },
+  const P101 = [
+    { name: 'Как в проекте', brick: '#c9a87c', band: 1, mortar: '#d8d1c4', roof: '#8b8f94', trim: '#f0ede7', frame: '#2a2e32' },
+    { name: 'Красный кирпич', brick: null, band: 0, mortar: '#5a5550', roof: '#34383c', trim: '#2a2e32', frame: '#2a2e32' },
+    { name: 'Графит', brick: '#3c3e42', band: 0, mortar: '#bdb7ad', roof: '#1f2225', trim: '#141517', frame: '#141517' },
+    { name: 'Терракота', brick: '#b2603a', band: 1, mortar: '#d2c8b9', roof: '#4b2a20', trim: '#efe9e0', frame: '#3a2a22' },
   ];
-  const VC = VARIANTS.map((v) => ({
-    tint: v.brick ? (() => { const c = lin(v.brick); return new V3(c.r, c.g, c.b); })() : new V3(1, 1, 1), use: v.brick ? 1 : 0,
-    mortar: lin(v.mortar), roof: lin(v.roof), trim: lin(v.trim),
+  const VC = P101.map((v) => ({
+    tint: v.brick ? (() => { const c = lin(v.brick); return new V3(c.r, c.g, c.b); })() : new V3(1, 1, 1), use: v.brick ? 1 : 0, band: v.band,
+    mortar: lin(v.mortar), roof: lin(v.roof), trim: lin(v.trim), frame: lin(v.frame),
   }));
+  // белый оштукатуренный пояс над окнами: тонкий слой поверх кладки, виден только у вариантов с поясом
+  const bandMat = patch(new THREE.MeshStandardMaterial({ color: lin('#efebe3'), roughness: 0.93, envMapIntensity: 0.4 }), 'bd-band', {
+    defines: SHARED, uniforms: { uVarT: U.varT, uBandA: U.bandA, uBandB: U.bandB },
+    vHead: 'varying vec3 vWP;', vEnd: WP_END,
+    fHead: 'varying vec3 vWP;\nuniform float uVarT, uBandA, uBandB;\nfloat bFront(){ return uVarT * 1.3 - 0.15; }',
+    fStart: 'float bY = (vWP.y - FLOOR_Y) / WALL_H;\nif (mix(uBandA, uBandB, 1.0 - smoothstep(bFront() - 0.08, bFront() + 0.01, bY)) < 0.5) discard;',
+  });
+  const band101 = (() => {
+    const G = G0(false);
+    for (const r of RUNS) {
+      const lo = Math.min(r.a0, r.a1) - 0.03, hi = Math.max(r.a0, r.a1) + 0.03;
+      const a = Math.min(r.f + r.o * 0.004, r.f + r.o * 0.03), b = Math.max(r.f + r.o * 0.004, r.f + r.o * 0.03);
+      if (r.ax === 'x') pushBox(G, wx(lo), FY + 2.25, wz(a), wx(hi), FY + WH, wz(b));
+      else pushBox(G, wx(a), FY + 2.25, wz(lo), wx(b), FY + WH, wz(hi));
+    }
+    const m = new THREE.Mesh(geoFrom(G), bandMat); m.receiveShadow = true; m.visible = false; scene.add(m);
+    return m;
+  })();
   let varCur = 0, varNext = 0, varT0 = -1;
   const VAR_DUR = 1800;
-  function applyVarColors(k) {                             // кровля/швы/рамы догоняют волну по кирпичу
+  function setBandUniforms() { U.bandA.value = VC[varCur].band; U.bandB.value = VC[varNext].band; }
+  function applyVarColors(k) {
     const a = VC[varCur], b = VC[varNext];
     mortarMesh.material.color.copy(a.mortar).lerp(b.mortar, sstep(seg(k, 0.05, 0.8)));
-    anth.color.copy(a.trim).lerp(b.trim, sstep(seg(k, 0.3, 0.85)));
+    frameMat.color.copy(a.frame).lerp(b.frame, sstep(seg(k, 0.2, 0.75)));
+    anth.color.copy(a.trim).lerp(b.trim, sstep(seg(k, 0.5, 0.9)));
     roofMat.color.copy(a.roof).lerp(b.roof, sstep(seg(k, 0.6, 1)));
   }
-  function setVariant(i) {
-    i = ((i % VARIANTS.length) + VARIANTS.length) % VARIANTS.length;
-    if (varT0 >= 0) { varCur = varNext; applyVarColors(0); }   // предыдущая смена ещё шла — досрочно завершаем
-    if (i === varCur) { varT0 = -1; U.varT.value = 0; return; }
+  function setVariant101(i) {
+    i = ((i % P101.length) + P101.length) % P101.length;
+    if (varT0 >= 0) { varCur = varNext; applyVarColors(0); }
+    if (i === varCur && varT0 === -1) return;
     U.varA.value.copy(VC[varCur].tint); U.tintA.value = VC[varCur].use;
     U.varB.value.copy(VC[i].tint); U.tintB.value = VC[i].use;
-    varNext = i; varT0 = -2;                               // старт — в ближайшем кадре
-    document.dispatchEvent(new CustomEvent('bd:variant', { detail: i }));
+    varNext = i; varT0 = -2; setBandUniforms();
   }
   function stepVariant(now) {
     if (varT0 === -1) return;
@@ -1727,34 +1790,273 @@ void main(){
     applyVarColors(k);
     if (k >= 1) {
       varCur = varNext; varT0 = -1; U.varT.value = 0;
-      U.varA.value.copy(VC[varCur].tint); U.tintA.value = VC[varCur].use;
+      U.varA.value.copy(VC[varCur].tint); U.tintA.value = VC[varCur].use; setBandUniforms();
     }
   }
+  // старт — «как в проекте», без волны
+  varCur = varNext = 0;
+  U.varA.value.copy(VC[0].tint); U.tintA.value = VC[0].use; U.varB.value.copy(VC[0].tint); U.tintB.value = VC[0].use; setBandUniforms();
+  applyVarColors(1);
 
-  // осмотр: дом можно повернуть мышью или пальцем (вбок; вертикальный свайп — прокрутка страницы)
-  let orbAz = 0, orbEl = 0, orbAzT = 0, orbElT = 0, drag = null;
-  canvas.style.touchAction = 'pan-y';
-  canvas.addEventListener('pointerdown', (e) => {
-    if (camBlend > 0.5) return;
-    drag = { x: e.clientX, y: e.clientY, az: orbAzT, el: orbElT, moved: false };
-  });
-  addEventListener('pointermove', (e) => {
-    if (!drag) return;
-    const dx = e.clientX - drag.x, dy = e.clientY - drag.y;
-    if (!drag.moved && Math.hypot(dx, dy) > 6) { drag.moved = true; document.dispatchEvent(new Event('bd:interact')); }
-    if (!drag.moved) return;
-    orbAzT = drag.az - dx * 0.28;
-    orbElT = clamp(drag.el + dy * 0.12, -14, 22);
-  }, { passive: true });
-  const endDrag = () => { drag = null; };
-  addEventListener('pointerup', endDrag); addEventListener('pointercancel', endDrag);
+  // ============================================================
+  //  ДОМ 118 м² — по рабочему проекту (план 15,98 × 9,09 м) и рендеру заказчика:
+  //  графитовый кирпич, панели планкена, полоса красного кирпича над цоколем, панорамные окна,
+  //  терраса в правом переднем углу с кирпичной колонной, двускатная кровля с фальцами и снегозадержателями.
+  //  Появляется «снизу вверх» со светящейся линией (uClip), стоит на том же газоне, что и 101.
+  // ============================================================
+  const H118 = (() => {
+    const g = new THREE.Group(); g.visible = false; scene.add(g);
+    const HX = 7.99, HZ = 4.545, T2 = 0.4, Y0 = FY, Y1 = FY + WH;
+    const NXa = 4.41, NZa = 2.835;                     // угол террасы (план: x 12,40 / z 7,38)
+    const OV = 0.55, OG = 0.6, PIT = 24 * Math.PI / 180;
 
-  // снимок кадра для окна «Хочу такой дом» (берём сразу после отрисовки — без preserveDrawingBuffer)
+    // --- текстуры с канвы: цвет нейтральный (красим цветом материала), рельеф — карта нормалей ---
+    function normalFrom(hgt, S, k) {
+      const cv = document.createElement('canvas'); cv.width = cv.height = S;
+      const cx = cv.getContext('2d'), img = cx.createImageData(S, S), d = img.data;
+      for (let y = 0; y < S; y++) for (let x = 0; x < S; x++) {
+        const dx = hgt[y * S + (x + 1) % S] - hgt[y * S + (x - 1 + S) % S], dy = hgt[((y + 1) % S) * S + x] - hgt[((y - 1 + S) % S) * S + x];
+        let nx = -dx * k, ny = dy * k, nz = 1; const l = Math.hypot(nx, ny, nz); nx /= l; ny /= l; nz /= l;
+        const i = (y * S + x) * 4; d[i] = (nx * 0.5 + 0.5) * 255; d[i + 1] = (ny * 0.5 + 0.5) * 255; d[i + 2] = (nz * 0.5 + 0.5) * 255; d[i + 3] = 255;
+      }
+      cx.putImageData(img, 0, 0);
+      const t = new THREE.CanvasTexture(cv); t.wrapS = t.wrapT = THREE.RepeatWrapping; t.anisotropy = 8;
+      return t;
+    }
+    function canvasTex(S, draw, hk) {
+      const cv = document.createElement('canvas'); cv.width = cv.height = S;
+      const cx = cv.getContext('2d'); const hgt = new Float32Array(S * S);
+      draw(cx, S, hgt);
+      const map = new THREE.CanvasTexture(cv); map.encoding = THREE.sRGBEncoding; map.wrapS = map.wrapT = THREE.RepeatWrapping; map.anisotropy = 8;
+      return { map, normal: normalFrom(hgt, S, hk) };
+    }
+    const rnd = mulberry(1180);
+    // кирпич: тайл 0,75 × 0,75 м — 10 рядов по 75 мм, 3 кирпича по 250 мм
+    const brickT = canvasTex(512, (cx, S, h) => {
+      const rowH = S / 10, bw = S / 3, j = 5;
+      cx.fillStyle = '#8a8884'; cx.fillRect(0, 0, S, S);
+      for (let r = 0; r < 10; r++) for (let c = -1; c < 4; c++) {
+        const x = c * bw + (r % 2) * bw / 2, y = r * rowH, v = 180 + rnd() * 40;
+        cx.fillStyle = `rgb(${v},${v - 2},${v - 5})`; cx.fillRect(x + j / 2, y + j / 2, bw - j, rowH - j);
+        for (let k = 0; k < 18; k++) { cx.fillStyle = `rgba(${rnd() < 0.5 ? '0,0,0' : '255,255,255'},${0.05 + rnd() * 0.07})`; cx.fillRect(x + j + rnd() * (bw - 2 * j), y + j + rnd() * (rowH - 2 * j), 2, 2); }
+      }
+      const px = cx.getImageData(0, 0, S, S).data;
+      for (let i = 0; i < S * S; i++) h[i] = px[i * 4] > 160 ? 1 : 0;
+    }, 3.2);
+    // планкен: тайл 0,6 м — 6 досок со щелями, продольные волокна
+    const woodT = canvasTex(512, (cx, S, h) => {
+      const bw = S / 6, gap = 6;
+      cx.fillStyle = '#2e2622'; cx.fillRect(0, 0, S, S);
+      for (let b = 0; b < 6; b++) {
+        const x0 = b * bw + gap / 2, v = 190 + rnd() * 35;
+        cx.fillStyle = `rgb(${v},${v * 0.95 | 0},${v * 0.9 | 0})`; cx.fillRect(x0, 0, bw - gap, S);   // почти нейтральная: тон даёт цвет материала
+        for (let k = 0; k < 26; k++) {
+          const gx = x0 + rnd() * (bw - gap), a = 0.06 + rnd() * 0.1;
+          cx.strokeStyle = `rgba(60,48,40,${a})`; cx.lineWidth = 1 + rnd() * 1.4; cx.beginPath();
+          for (let y = 0; y <= S; y += 16) cx.lineTo(gx + Math.sin(y * 0.02 + k) * 2.5, y);
+          cx.stroke();
+        }
+        for (let y = 0; y < S; y++) for (let x = Math.ceil(x0); x < x0 + bw - gap; x++) h[y * S + x] = 1;
+      }
+    }, 2.4);
+    // фальцевая кровля: тайл 0,5 м — фальц и два ребра жёсткости
+    const roofT = canvasTex(256, (cx, S, h) => {
+      cx.fillStyle = '#7d7f82'; cx.fillRect(0, 0, S, S);
+      cx.fillStyle = '#9a9c9f'; cx.fillRect(0, 0, 9, S);
+      cx.fillStyle = 'rgba(0,0,0,.08)'; cx.fillRect(S * 0.33, 0, 3, S); cx.fillRect(S * 0.66, 0, 3, S);
+      for (let y = 0; y < S; y++) { for (let x = 0; x < 9; x++) h[y * S + x] = 1 - Math.abs(x - 4) / 5; h[y * S + Math.round(S * 0.33)] = 0.25; h[y * S + Math.round(S * 0.66)] = 0.25; }
+    }, 2.0);
+
+    // --- материалы ---
+    const PAL = [
+      { name: 'Как в проекте', brick: '#3d4249', wood: '#b88c5c', band: '#a8442a', roof: '#2d3034', frame: '#17181a' },
+      { name: 'Светлый кирпич', brick: '#cdb898', wood: '#a98058', band: '#a8442a', roof: '#30333a', frame: '#1d1e20' },
+      { name: 'Красный кирпич', brick: '#8a4634', wood: '#c4a070', band: '#5c2a1c', roof: '#2a2c2f', frame: '#1d1e20' },
+    ];
+    const lift = (hex, k) => lin(hex).multiplyScalar(k);   // текстуры светлые — цвет материала чуть приподнимаем
+    const clipUni = { uClip: U.clip118 };
+    const clipPatch = (m, key) => patch(m, 'bd-118-' + key, {
+      defines: SHARED, uniforms: clipUni, vHead: 'varying vec3 vWP;', vEnd: WP_END,
+      fHead: 'varying vec3 vWP;\nuniform float uClip;', fStart: 'if (vWP.y > uClip) discard;',
+      fEmis: 'totalEmissiveRadiance += ACCENT_LIN * (1.0 - smoothstep(0.0, 0.1, uClip - vWP.y)) * step(uClip, 50.0) * 1.3;',
+    });
+    const depthMat = patch(new THREE.MeshDepthMaterial({ depthPacking: THREE.RGBADepthPacking }), 'bd-118-depth', {
+      uniforms: clipUni, vHead: 'varying vec3 vWP;', vEnd: WP_END, fHead: 'varying vec3 vWP;\nuniform float uClip;', fStart: 'if (vWP.y > uClip) discard;',
+    });
+    const M = {
+      brick: clipPatch(new THREE.MeshStandardMaterial({ map: brickT.map, normalMap: brickT.normal, normalScale: new THREE.Vector2(0.85, 0.85), roughness: 0.86, envMapIntensity: 0.4 }), 'brick'),
+      wood: clipPatch(new THREE.MeshStandardMaterial({ map: woodT.map, normalMap: woodT.normal, normalScale: new THREE.Vector2(0.6, 0.6), roughness: 0.62, envMapIntensity: 0.5 }), 'wood'),
+      band: clipPatch(new THREE.MeshStandardMaterial({ map: brickT.map, normalMap: brickT.normal, roughness: 0.85, envMapIntensity: 0.35 }), 'band'),
+      plinth: clipPatch(pbr(TX.concrete, '#9b968f'), 'plinth'),
+      roof: clipPatch(new THREE.MeshStandardMaterial({ map: roofT.map, normalMap: roofT.normal, normalScale: new THREE.Vector2(1.1, 1.1), roughness: 0.42, metalness: 0.55, envMapIntensity: 1.0, side: THREE.DoubleSide }), 'roof'),
+      trim: clipPatch(new THREE.MeshStandardMaterial({ color: lin('#1a1b1d'), roughness: 0.45, metalness: 0.4, envMapIntensity: 0.9 }), 'trim'),
+      frame: clipPatch(new THREE.MeshStandardMaterial({ color: lin('#17181a'), roughness: 0.4, metalness: 0.3, envMapIntensity: 0.9 }), 'frame'),
+      glass: clipPatch(new THREE.MeshStandardMaterial({ color: lin('#1a2228'), roughness: 0.04, metalness: 0.92, envMapIntensity: 1.5, emissive: lin('#ffb36e'), emissiveIntensity: 0 }), 'glass'),
+      door: clipPatch(new THREE.MeshStandardMaterial({ color: lin('#2c3035'), roughness: 0.5, metalness: 0.25 }), 'door'),
+      steel: clipPatch(new THREE.MeshStandardMaterial({ color: lin('#c9cdd2'), roughness: 0.3, metalness: 0.9 }), 'steel'),
+      soffit: clipPatch(new THREE.MeshStandardMaterial({ color: lin('#2e3033'), roughness: 0.8, side: THREE.DoubleSide }), 'soffit'),
+    };
+    const US = 1 / 0.75, UW = 1 / 0.6;
+    const GB = G0(), GW = G0(), GR = G0(), GP = G0(), GF = G0(false), GT = G0(false), GD = G0(false), GS = G0(false);
+    const box = (G, x0, y0, z0, x1, y1, z1, us) => { if (x1 - x0 > 1e-3 && y1 - y0 > 1e-3 && z1 - z0 > 1e-3) pushBox(G, x0, y0, z0, x1, y1, z1, us); };
+    const glassPanes = [];
+    let nWin = 0;
+
+    // окно или дверь в стене: рама из брусков, импосты, стекло; дверь — полотно с ручкой-скобой и стеклянной вставкой
+    function opening(ax, face, out, o) {
+      const d0 = face - out * 0.17, d1 = face - out * 0.07;                 // рама утоплена в проём
+      const z0 = Math.min(d0, d1), z1 = Math.max(d0, d1);
+      const u0 = o.c - o.w / 2, u1 = o.c + o.w / 2, y0 = Y0 + o.s, y1 = Y0 + o.h, f = 0.06;
+      const B = (G, a, b, c0, c1, ya, yb) => (ax === 'x' ? box(G, a, ya, c0, b, yb, c1) : box(G, c0, ya, a, c1, yb, b));
+      B(GF, u0, u1, z0, z1, y1 - f, y1); B(GF, u0, u0 + f, z0, z1, y0, y1); B(GF, u1 - f, u1, z0, z1, y0, y1);
+      if (o.kind === 'door') {
+        B(GD, u0 + f, u1 - f, z0 + 0.02, z1 - 0.02, y0, y1 - f);
+        const hp = out > 0 ? z1 : z0, hu = u1 - f - 0.14;
+        B(GT, hu, hu + 0.03, Math.min(hp, hp + out * 0.06), Math.max(hp, hp + out * 0.06), y0 + 0.5, y0 + 1.8);
+        const gl = new THREE.Mesh(new THREE.PlaneGeometry(0.12, 1.3), M.glass);
+        placePane(gl, ax, out, u0 + f + 0.22, y0 + 1.15, face - out * 0.045 + out * 0.0);
+        return;
+      }
+      nWin++;
+      B(GF, u0, u1, z0, z1, y0, y0 + f);
+      const tall = o.h - o.s > 2.0, panes = tall ? Math.max(1, Math.round(o.w / 0.5)) : (o.w > 1.0 ? 2 : 1);
+      const pw = (o.w - 2 * f) / panes;
+      for (let i = 1; i < panes; i++) { const x = u0 + f + i * pw; B(GF, x - 0.025, x + 0.025, z0 + 0.01, z1 - 0.01, y0, y1); }
+      if (tall && o.h - o.s > 2.3) B(GF, u0, u1, z0 + 0.01, z1 - 0.01, y1 - 0.62, y1 - 0.57);   // фрамуга
+      const gl = new THREE.Mesh(new THREE.PlaneGeometry(o.w - 2 * f, o.h - o.s - 2 * f), M.glass);
+      placePane(gl, ax, out, o.c, (y0 + y1) / 2, face - out * 0.12);
+    }
+    function placePane(m, ax, out, u, y, d) {
+      if (ax === 'x') { m.position.set(u, y, d); if (out < 0) m.rotation.y = Math.PI; }
+      else { m.position.set(d, y, u); m.rotation.y = out > 0 ? Math.PI / 2 : -Math.PI / 2; }
+      g.add(m); glassPanes.push(m);
+    }
+    // стена: ax — вдоль какой оси, face — наружная плоскость, out — куда «наружу»; spans — где планкен
+    function wall(ax, face, out, a, b, spans, ops, bandA = a, bandB = b) {
+      const p0 = out > 0 ? face - T2 : face, p1 = out > 0 ? face : face + T2;
+      const W_ = (G, u0, u1, y0, y1, us) => (ax === 'x' ? box(G, u0, y0, p0, u1, y1, p1, us) : box(G, p0, y0, u0, p1, y1, u1, us));
+      const q0 = out > 0 ? face : face - 0.025, q1 = out > 0 ? face + 0.025 : face;
+      const bandBox = (u0, u1) => (ax === 'x' ? box(GR, u0, Y0, q0, u1, Y0 + 0.22, q1, US) : box(GR, q0, Y0, u0, q1, Y0 + 0.22, u1, US));
+      const isWood = (u) => spans.some(([s0, s1]) => u > s0 && u < s1);
+      const cuts = new Set([a, b]);
+      for (const [s0, s1] of spans) for (const s of [s0, s1]) if (s > a && s < b) cuts.add(s);
+      for (const o of ops) { cuts.add(o.c - o.w / 2); cuts.add(o.c + o.w / 2); }
+      const xs = [...cuts].sort((m, n) => m - n);
+      for (let i = 0; i < xs.length - 1; i++) {
+        const u0 = xs[i], u1 = xs[i + 1], um = (u0 + u1) / 2;
+        const op = ops.find((o) => um > o.c - o.w / 2 && um < o.c + o.w / 2);
+        const wood = isWood(um), G = wood ? GW : GB, us = wood ? UW : US;
+        if (!op) { W_(G, u0, u1, Y0, Y1, us); if (!wood) bandBox(u0, u1); }
+        else { W_(G, u0, u1, Y0, Y0 + op.s, us); W_(G, u0, u1, Y0 + op.h, Y1, us); if (op.s > 0.2 && !wood) bandBox(u0, u1); }
+      }
+      if (bandA < a) bandBox(bandA, a); if (bandB > b) bandBox(b, bandB);
+      for (const o of ops) opening(ax, face, out, o);
+    }
+    const w = (c, ww, s = 0.9, h = 2.45) => ({ c, w: ww, s, h, kind: 'win' });
+    const dr = (c, ww) => ({ c, w: ww, s: 0, h: 2.3, kind: 'door' });
+    const m2x = (m) => m - HX;                                           // метры плана → координаты дома
+    // фасад с входом (z = +HZ): планкен слева, кирпич с двумя окнами санузлов, планкен с дверью тамбура и окном
+    wall('x', HZ, 1, -HX, NXa, [[m2x(0), m2x(2.2)], [m2x(5.84), NXa]],
+      [w(m2x(1.25), 1.05, 0.25, 2.7), w(m2x(2.83), 0.5, 1.55), w(m2x(4.53), 0.7, 1.4), dr(m2x(7.05), 1.05), w(m2x(8.93), 0.75, 1.45)]);
+    wall('z', NXa, 1, NZa, HZ - T2, [[NZa, HZ]], []);                   // боковина террасы — планкен
+    wall('x', NZa, 1, NXa - T2, HX, [], [w(5.75, 2.2, 0.05, 2.7)]);      // стена террасы — панорамное окно кухни-гостиной
+    wall('z', HX, 1, -HZ + T2, NZa - T2, [[-2.6, NZa]], [w(-1.25, 1.3, 0.05, 2.7), w(1.2, 1.2, 0.05, 2.7)], -HZ - 0.025, NZa - T2);
+    wall('x', -HZ, -1, -HX, HX, [], [w(m2x(1.0), 0.6, 1.5), w(m2x(3.7), 1.2), w(m2x(7.2), 1.2), w(m2x(9.8), 1.4), w(m2x(11.9), 1.4)]);
+    wall('z', -HX, -1, -HZ + T2, HZ - T2, [], [w(1.8, 1.4)], -HZ - 0.025, HZ + 0.025);
+    box(GB, 7.0, Y0, 3.3, HX, Y1, HZ, US);                              // кирпичная колонна на углу террасы
+    box(GR, 6.975, Y0, 3.275, HX + 0.025, Y0 + 0.22, HZ + 0.025, US);
+    box(GB, NXa - T2, Y1 - 0.32, HZ - T2, 7.0, Y1, HZ, US);              // перемычка над террасой
+    box(GP, -HX - 0.04, 0, -HZ - 0.04, HX + 0.04, Y0, HZ + 0.04);        // цоколь (и пол террасы)
+    for (const [z1, h] of [[HZ + 0.95, 0.17], [HZ + 0.65, 0.34], [HZ + 0.35, 0.5]]) box(GP, m2x(7.05) - 0.8, 0, HZ, m2x(7.05) + 0.8, h, z1);   // крыльцо
+
+    // --- кровля ---
+    const tanP = Math.tan(PIT), zE = HZ + OV, yE = Y1 - OV * tanP + 0.06, yR = Y1 + HZ * tanP + 0.06, xA = -HX - OG, xB = HX + OG;
+    const slopeLen = Math.hypot(zE, yR - yE);
+    const roofGeo = (() => {
+      const P = [], UVv = [];
+      for (const s of [1, -1]) {
+        const a = [xA, yE, s * zE], b = [xB, yE, s * zE], c = [xB, yR, 0], d = [xA, yR, 0];
+        const uv = (p, v) => [p[0] / 0.5, v];
+        const tris = s > 0 ? [[a, 0], [b, 0], [c, slopeLen], [a, 0], [c, slopeLen], [d, slopeLen]] : [[b, 0], [a, 0], [d, slopeLen], [b, 0], [d, slopeLen], [c, slopeLen]];
+        for (const [p, v] of tris) { P.push(...p); UVv.push(...uv(p, v)); }
+      }
+      const geo = new THREE.BufferGeometry();
+      geo.setAttribute('position', new THREE.Float32BufferAttribute(P, 3)); geo.setAttribute('uv', new THREE.Float32BufferAttribute(UVv, 2));
+      geo.computeVertexNormals();
+      return geo;
+    })();
+    const roof = new THREE.Mesh(roofGeo, M.roof); roof.castShadow = true; roof.receiveShadow = true; g.add(roof);
+    // фронтоны — треугольники кладки над стенами торцов
+    const gable = (x, flip) => {
+      const P = [x, Y1, -HZ, x, Y1, HZ, x, yR - 0.06, 0], UVv = [-HZ * US, Y1 * US, HZ * US, Y1 * US, 0, (yR - 0.06) * US];
+      const geo = new THREE.BufferGeometry();
+      geo.setAttribute('position', new THREE.Float32BufferAttribute(flip ? [P[3], P[4], P[5], P[0], P[1], P[2], P[6], P[7], P[8]] : P, 3));
+      geo.setAttribute('uv', new THREE.Float32BufferAttribute(flip ? [UVv[2], UVv[3], UVv[0], UVv[1], UVv[4], UVv[5]] : UVv, 2));
+      geo.computeVertexNormals();
+      const m = new THREE.Mesh(geo, M.brick); m.castShadow = true; m.receiveShadow = true; g.add(m);
+    };
+    gable(HX, true); gable(-HX, false);
+    // лобовые доски, ветровые доски по фронтонам, конёк, подшивка, водостоки, снегозадержатели
+    box(GT, xA, yE - 0.2, zE - 0.03, xB, yE + 0.02, zE + 0.01); box(GT, xA, yE - 0.2, -zE - 0.01, xB, yE + 0.02, -zE + 0.03);
+    box(GT, xA - 0.01, yR - 0.02, -0.12, xB + 0.01, yR + 0.07, 0.12);
+    box(GS, xA, yE - 0.2, HZ, xB, yE - 0.18, zE - 0.03); box(GS, xA, yE - 0.2, -zE + 0.03, xB, yE - 0.18, -HZ);
+    box(GS, NXa, Y1 - 0.02, NZa, HX, Y1, HZ);                           // потолок террасы
+    const extra = [];
+    const beam = (a, b, r, mat) => {
+      const A = new V3(...a), Bv = new V3(...b), len = A.distanceTo(Bv);
+      const m = new THREE.Mesh(new THREE.CylinderGeometry(r, r, len, 10).rotateX(Math.PI / 2), mat);
+      m.position.copy(A).add(Bv).multiplyScalar(0.5); m.lookAt(Bv); m.castShadow = true; g.add(m); extra.push(m);
+    };
+    for (const sx of [xA, xB]) for (const s of [1, -1]) {                  // ветровые доски
+      const m = new THREE.Mesh(new THREE.BoxGeometry(0.07, 0.26, slopeLen + 0.08), M.trim);
+      m.position.set(sx, (yE + yR) / 2 - 0.06, s * zE / 2); m.rotation.x = s * PIT; m.castShadow = true; g.add(m); extra.push(m);
+    }
+    for (const s of [1, -1]) beam([xA, yE - 0.12, s * (zE + 0.07)], [xB, yE - 0.12, s * (zE + 0.07)], 0.07, M.trim);   // водостоки
+    for (const [x, z] of [[-HX + 0.22, HZ + 0.12], [6.9, HZ + 0.12], [-HX + 0.22, -HZ - 0.12], [HX - 0.22, -HZ - 0.12]]) beam([x, yE - 0.15, z], [x, 0.18, z], 0.045, M.trim);
+    for (const off of [0, 0.09]) {                                         // снегозадержатель — две трубки на кронштейнах
+      const dd = 1.1 + off, z = zE - dd * Math.cos(PIT), y = yE + dd * Math.sin(PIT) + 0.06;
+      beam([xA + 0.4, y, z], [xB - 0.4, y, z], 0.016, M.trim);
+    }
+    for (let x = xA + 0.6; x < xB - 0.4; x += 1.1) { const z = zE - 1.13 * Math.cos(PIT), y = yE + 1.13 * Math.sin(PIT) + 0.03; box(GT, x - 0.02, y - 0.04, z - 0.03, x + 0.02, y + 0.08, z + 0.03); }
+
+    // --- сборка мешей ---
+    const add = (G, mat, shadow = true) => { const m = new THREE.Mesh(geoFrom(G), mat); m.castShadow = shadow; m.receiveShadow = true; g.add(m); return m; };
+    add(GB, M.brick); add(GW, M.wood); add(GR, M.band); add(GP, M.plinth); add(GF, M.frame); add(GT, M.trim); add(GD, M.door); add(GS, M.soffit, false);
+    g.traverse((o) => { if (o.isMesh) o.customDepthMaterial = depthMat; });
+
+    // --- палитры и появление ---
+    const COLS = ['brick', 'wood', 'band', 'roof', 'frame'];
+    const cur = {}, tgt = {};
+    const palColors = (p) => ({ brick: lift(p.brick, 1.3), wood: lift(p.wood, 1.25), band: lift(p.band, 1.3), roof: lift(p.roof, 1.6), frame: lin(p.frame) });
+    let pal = 0;
+    Object.assign(tgt, palColors(PAL[0])); for (const k of COLS) cur[k] = tgt[k].clone();
+    const syncCols = () => { M.brick.color.copy(cur.brick); M.wood.color.copy(cur.wood); M.band.color.copy(cur.band); M.roof.color.copy(cur.roof); M.frame.color.copy(cur.frame); };
+    syncCols();
+    const ROOF_A = (xB - xA) * 2 * slopeLen;
+    return {
+      group: g, PAL, top: yR + 0.3,
+      get pal() { return pal; },
+      stats: { area: '118,10 м²', bricks: Math.round(((2 * (2 * HX + 2 * HZ)) * WH * 0.55 + HZ * HZ * tanP * 2) * 51.3), roof: Math.round(ROOF_A), wins: nWin },
+      bounds: { x0: xA - 1.5, x1: xB + 1.5, z0: -zE - 1.5, z1: zE + 2.2, y1: yR + 1.5 },
+      setPalette(i) { pal = ((i % PAL.length) + PAL.length) % PAL.length; Object.assign(tgt, palColors(PAL[pal])); },
+      update(dt, L, r) {
+        const k = 1 - Math.exp(-dt * 3.2);
+        for (const c of COLS) cur[c].lerp(tgt[c], k);
+        syncCols();
+        M.glass.emissiveIntensity = L * 0.18;
+        g.visible = r > 0.001;
+        U.clip118.value = r >= 0.999 ? 99 : lerp(-0.3, yR + 0.4, r);
+      },
+    };
+  })();
+
+  // снимок кадра для окна «Хочу такой дом» (сразу после отрисовки — без preserveDrawingBuffer)
   let snapReq = null;
   const _pv = new V3();
-  function houseRect() {                                   // где на кадре дом с деревьями (доли ширины/высоты)
+  function houseRect() {                                   // где на кадре текущий дом с деревьями (доли ширины/высоты)
+    const b = r118eff > 0.5 ? H118.bounds : { x0: OX - 2.5, x1: OX + W + 2.5, z0: OZ - 2.5, z1: OZ + D + 2.5, y1: 7.5 };
     let x0 = 1, x1 = 0, y0 = 1, y1 = 0;
-    for (const x of [OX - 2.5, OX + W + 2.5]) for (const y of [0, 7.5]) for (const z of [OZ - 2.5, OZ + D + 2.5]) {
+    for (const x of [b.x0, b.x1]) for (const y of [0, b.y1]) for (const z of [b.z0, b.z1]) {
       _pv.set(x, y, z).project(camera);
       const px = (_pv.x + 1) / 2, py = (1 - _pv.y) / 2;
       x0 = Math.min(x0, px); x1 = Math.max(x1, px); y0 = Math.min(y0, py); y1 = Math.max(y1, py);
@@ -1762,11 +2064,17 @@ void main(){
     return { x0: clamp(x0), x1: clamp(x1), y0: clamp(y0), y1: clamp(y1) };
   }
   window.BD3D = {
-    variants: VARIANTS.map((v) => v.name),
-    get current() { return varT0 === -1 ? varCur : varNext; },
-    setVariant,
+    houses: [
+      { id: '101', name: 'Дом 101 м²', palettes: P101.map((v) => ({ name: v.name, b: v.brick || '#6b3b29', r: v.roof })) },
+      { id: '118', name: 'Дом 118 м²', palettes: H118.PAL.map((v) => ({ name: v.name, b: v.brick, r: v.wood })) },
+    ],
+    get house() { return houseTo; },
+    get current() { return houseTo === 1 ? H118.pal : (varT0 === -1 ? varCur : varNext); },
+    setHouse,
+    setVariant(i) { if (houseTo === 1) H118.setPalette(i); else setVariant101(i); document.dispatchEvent(new CustomEvent('bd:variant', { detail: i })); },
     snapshot: () => new Promise((r) => { snapReq = r; }),
   };
+  H118stats = H118.stats;
 
   // прогрев: всё видно и «построено», чтобы скомпилировать шейдеры до первого кадра
   U.bC.value = U.kC.value = U.wC.value = U.aC.value = U.pC.value = 99; U.roofY.value = U.membY.value = 99; U.mY.value = U.lY.value = 99;
@@ -1778,14 +2086,17 @@ void main(){
   let t0 = -1, shadowP = -1, ftAvg = 16, ftN = 0;
   renderer.shadowMap.autoUpdate = false;   // свет неподвижен: тени пересчитываем, только когда стройка сдвинулась
   canvas.classList.add('on');
-  return function frame(p, now, rawDt) {
-    if (!onScreen) return;
+  const HTML = document.documentElement;
+  return function frame(p, now, rawDt, ps = p) {
+    if (!onScreen || HTML.classList.contains('pz-open')) return;   // под презентацией не рисуем
     const dt = Math.min(0.2, rawDt);
     mx = lerp(mx, tmx, 1 - Math.exp(-dt * 3)); my = lerp(my, tmy, 1 - Math.exp(-dt * 3));
     if (t0 < 0) t0 = now;
     const draw = (REDUCED || forcedP !== null) ? 1 : clamp((now - t0 - 250) / 2900);
-    apply(p, draw, now);
-    if (p !== shadowP) { renderer.shadowMap.needsUpdate = true; shadowP = p; }
+    apply(p, draw, now, ps);
+    H118.update(dt, U.lights.value, r118eff);
+    const sk = p + r118eff * 3.1 + ps * 0.37;
+    if (sk !== shadowP) { renderer.shadowMap.needsUpdate = true; shadowP = sk; }
     renderer.render(scene, camera);
     if (snapReq) { try { snapReq({ url: canvas.toDataURL('image/jpeg', 0.9), rect: houseRect() }); } catch (e) { snapReq(null); } snapReq = null; }
     ftN++;

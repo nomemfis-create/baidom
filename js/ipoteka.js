@@ -86,6 +86,7 @@ let visible = false, raf = 0, last = performance.now(), lp = -1, lm = -1;
 function loop(now) {
   raf = visible ? requestAnimationFrame(loop) : 0;
   const dt = Math.min(0.1, (now - last) / 1000); last = now;
+  if (document.documentElement.classList.contains('pz-open')) return;   // под презентацией не рисуем
   const k = REDUCED ? 1 : 1 - Math.exp(-dt * 5);
   shown.price = lerp(shown.price, tgt.price, k); shown.month = lerp(shown.month, tgt.month, k);
   if (Math.abs(shown.price - tgt.price) < 5) shown.price = tgt.price;
