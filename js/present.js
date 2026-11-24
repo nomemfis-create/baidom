@@ -1,27 +1,13 @@
-/* БАЙДОМ — 3D-презентации условий (trade-in, земля, референсы, ипотека) и появление пунктов «Свой дом или квартира».
-   Нажали на карточку условия → полноэкранная презентация. Колесо мыши, свайп, стрелки или точки справа листают слайды,
-   а 3D-сцена из «кирпичиков» перестраивается: квартира превращается в дом, участок — в стройку, фото — в проект.
-   Сцена — один InstancedMesh из кубиков с фаской; каждый кубик летит из старого места в новое по дуге,
-   снизу вверх, как кладка. Без three.js презентация работает как обычные слайды с текстом. */
+/* БАЙДОМ — всё «кубиковое» 3D сайта:
+   • картинки карточек условий (рисуются один раз в фоне и становятся <img>);
+   • сцена «Свой дом вместо квартиры» — двор с домом, баней, машиной и метками-выгодами;
+   • полноэкранные 3D-презентации условий: колесо мыши, свайп, стрелки или точки листают слайды,
+     а сцена из кубиков перестраивается (квартира → дом, участок → стройка, фото → проект).
+   Сцена — один InstancedMesh из кубиков с фаской; кубик летит из старого места в новое по дуге, снизу вверх, как кладка.
+   Текста минимум: картинка объясняет, подпись — 2–4 слова. Без three.js всё работает как обычный текст. */
 (() => {
 'use strict';
 const html = document.documentElement;
-
-// ---------- «Свой дом или квартира»: пункты появляются, боль зачёркивается ----------
-(() => {
-  const grid = document.querySelector('.plusy-grid');
-  if (!grid || !('IntersectionObserver' in window)) return;
-  grid.classList.add('anim');
-  const io = new IntersectionObserver((es) => {
-    let k = 0;
-    for (const e of es) {
-      if (!e.isIntersecting) continue;
-      e.target.style.setProperty('--d', (k++ * 0.09).toFixed(2) + 's');
-      e.target.classList.add('in'); io.unobserve(e.target);
-    }
-  }, { rootMargin: '0px 0px -10% 0px' });
-  Array.from(grid.children).forEach((li) => io.observe(li));
-})();
 
 // ============================================================
 //  ВОКСЕЛЬНЫЕ СЦЕНЫ
@@ -30,7 +16,8 @@ const PAL = {
   grass: '#86a65a', grass2: '#7b9b51', grass3: '#94b366', soil: '#7d5b3d', soil2: '#6c4e34',
   conc: '#cbc5ba', conc2: '#bdb6aa', asph: '#9a9893', asph2: '#8d8b86',
   brick: '#b0532f', brick2: '#9d4829', brick3: '#bf6239',
-  sand: '#d9c096', sand2: '#cdb385', roof: '#4d5158', roof2: '#43474e',
+  sand: '#d9c096', sand2: '#cdb385', roof: '#41454c', roof2: '#383b41',
+  car: '#3f6fb5', car2: '#335d9c', tire: '#232427', coal: '#e3662a', smoke: '#ebe8e2',
   trim: '#f1ede6', glass: '#a8c6d6', glass2: '#8db0c4', door: '#5b3b27', wood: '#b88a58',
   panel: '#d9d4ca', panel2: '#c8c2b7', pwin: '#8098a7',
   acc: '#c4561d', acc2: '#e5824f', ghost: '#e0dbd2',
@@ -53,6 +40,7 @@ class Vox {
   ring(x0, z0, x1, z1, y, c) { for (let x = x0; x <= x1; x++) for (let z = z0; z <= z1; z++) if (x === x0 || x === x1 || z === z0 || z === z1) this.set(x, y, z, c); return this; }
   tag(x, y, z, t) { this.tags.push({ x, y, z, t }); return this; }
   each(fn) { for (const v of this.m.values()) fn(v); return this; }
+  put(V, dx, dy, dz) { this.each((v) => V.set(v.x + dx, v.y + dy, v.z + dz, v.c, v.id)); this.tags.forEach((g) => V.tag(g.x + dx, g.y + dy, g.z + dz, g.t)); return V; }
 }
 
 function ground(V, x0, z0, x1, z1, top = GR) {
@@ -225,17 +213,7 @@ const SHAPES = {
     yard(V);
     return V.tag(0, 9, 0, 'Ваш дом на вашей земле'); },
   // ---------- референсы ----------
-  r1() { const V = new Vox(); ground(V, -9, -5, 9, 5, ['conc', 'conc2']);
-    V.box(-5, 0, 0, 5, 19, 0, 'phone');
-    for (let u = 0; u < 9; u++) for (let v = 0; v < 16; v++) {
-      let c = 'sky';
-      if (v <= 2) c = GR;
-      else if (v <= 8 && u >= 1 && u <= 7) c = (u === 4 && v <= 5) ? 'door' : ((u === 2 || u === 3 || u === 5 || u === 6) && (v === 5 || v === 6)) ? 'glass2' : SA;
-      else if (v >= 9 && v <= 12 && Math.abs(u - 4) <= 12 - v) c = ROOF;
-      else if (u === 7 && v === 14) c = 'gold';
-      V.set(-4 + u, 2 + v, 0, c);
-    }
-    V.box(-1, 18, 0, 1, 18, 0, 'wire');
+  r1() { const V = new Vox(); ground(V, -9, -5, 9, 5, ['conc', 'conc2']); phoneArt(V);
     return V.tag(0, 20, 0, 'Фото, которое нравится'); },
   r2() { const V = new Vox(); ground(V, -12, -9, 12, 9); house(V); blueprint(V); return V.tag(0, 9, 0, 'Проект по вашему фото'); },
   r3() { const V = new Vox(); ground(V, -12, -9, 12, 9); house(V, { dW: 2, dR: 5 });
@@ -251,43 +229,102 @@ const SHAPES = {
     for (let k = 0; k < 12; k++) V.box(-11 + k * 2, 0, 7, -11 + k * 2, 2, 7, k % 2 ? 'gold2' : 'gold');
     return V.tag(0, 3, 7, 'Платёж каждый месяц'); },
   i4() { const V = new Vox(); plotGround(V); yard(V); return V.tag(0, 9, 0, 'Ваш дом'); },
+  // ---------- картинки карточек условий ----------
+  pv_tradein() { const V = new Vox(); ground(V, -19, -7, 17, 7);
+    for (let x = -19; x <= -5; x++) for (let z = -7; z <= 7; z++) V.set(x, -1, z, ASPH);
+    const B = new Vox(); block(B); flatCells((x, y, z, n, w) => B.set(x, y, z, w ? 'acc2' : 'acc')); B.put(V, -11, 0, 0);
+    const Hs = new Vox(); house(Hs, { wall: BR }); Hs.put(V, 9, 0, 0);
+    for (let x = -6; x <= -2; x++) V.set(x, 7, 0, 'acc');
+    for (const [x, y] of [[-1, 7], [-2, 8], [-2, 6], [-3, 9], [-3, 5]]) V.set(x, y, 0, 'acc');
+    return V; },
+  pv_refs() { const V = new Vox(); ground(V, -17, -6, 16, 6);
+    for (let x = -16; x <= -4; x++) for (let z = -4; z <= 4; z++) V.set(x, -1, z, ['conc', 'conc2']);
+    const P = new Vox(); phoneArt(P); P.put(V, -10, 0, 0);
+    const Hs = new Vox(); house(Hs); Hs.put(V, 8, 0, 0);
+    return V; },
+  pv_ipoteka() { const V = new Vox(); plotGround(V); house(V, { wall: BR });
+    for (let k = 0; k < 10; k++) V.box(-9 + k * 2, 0, 6, -9 + k * 2, 1 + (k % 2), 6, k % 2 ? 'gold2' : 'gold');
+    return V; },
+  // ---------- «Свой дом вместо квартиры»: двор, где видно, что вы получаете ----------
+  diorama() { const V = new Vox(); ground(V, -16, -11, 16, 10);
+    for (let x = -16; x <= 16; x++) for (const z of [9, 10]) V.set(x, -1, z, ASPH);              // улица
+    for (let x = -14; x <= -10; x++) for (let z = 1; z <= 8; z++) V.set(x, -1, z, ASPH);         // заезд
+    for (let z = 2; z <= 8; z++) { V.set(0, -1, z, 'conc'); V.set(1, -1, z, 'conc2'); }         // дорожка к крыльцу
+    for (let x = -15; x <= 15; x++) for (let z = -10; z <= 8; z++) {                              // живая изгородь, ворота и калитка
+      if (!(x === -15 || x === 15 || z === -10 || z === 8)) continue;
+      if (z === 8 && ((x >= -14 && x <= -10) || (x >= -1 && x <= 2))) continue;
+      const post = (x === -15 || x === 15) && (z === -10 || z === 8) || (z === 8 && (x === -15 || x === -9 || x === -2 || x === 3));
+      if (post) V.box(x, 0, z, x, 1, z, 'wood'); else V.set(x, 0, z, LEAF);
+    }
+    house(V, { x0: -6, z0: -8, W: 14, D: 10, wall: BR });
+    // машина у ворот
+    for (const [x, z] of [[-13, 3], [-11, 3], [-13, 7], [-11, 7]]) V.set(x, 0, z, 'tire');
+    V.box(-13, 1, 3, -11, 1, 7, 'car'); V.box(-13, 2, 4, -11, 2, 6, 'glass2'); V.box(-13, 3, 4, -11, 3, 6, 'car2');
+    V.set(-13, 1, 7, 'white'); V.set(-11, 1, 7, 'white');
+    // баня с трубой
+    for (let y = 0; y <= 2; y++) V.ring(9, -9, 13, -6, y, 'wood');
+    V.set(11, 0, -6, 'door'); V.set(11, 1, -6, 'door');
+    V.box(8, 3, -10, 14, 3, -5, ROOF); V.box(9, 4, -9, 13, 4, -6, ROOF); V.box(10, 5, -8, 12, 5, -7, ROOF);
+    V.box(12, 4, -8, 12, 7, -8, 'wire'); V.set(12, 9, -8, 'smoke'); V.set(13, 10, -8, 'smoke'); V.set(12, 11, -9, 'smoke');
+    // качели и песочница
+    V.box(9, 0, 4, 9, 4, 4, 'wood'); V.box(13, 0, 4, 13, 4, 4, 'wood'); V.box(9, 4, 4, 13, 4, 4, 'wood');
+    V.box(11, 2, 4, 11, 3, 4, 'wire'); V.set(11, 1, 4, 'acc');
+    V.ring(4, 4, 6, 6, 0, 'wood'); V.set(5, 0, 5, 'sand');
+    // теплица и грядки
+    for (let y = 0; y <= 1; y++) V.ring(-14, -9, -11, -7, y, 'glass'); V.box(-14, 2, -9, -11, 2, -7, 'glass2');
+    for (const z of [-5, -3]) { V.box(-14, 0, z, -11, 0, z, 'soil'); V.set(-14, 1, z, 'leaf3'); V.set(-12, 1, z, 'leaf3'); }
+    // мангал у дома
+    V.box(9, 0, 0, 9, 1, 0, 'phone'); V.set(9, 2, 0, 'coal'); V.set(9, 4, 0, 'smoke'); V.set(10, 5, -1, 'smoke');
+    tree(V, -8, 6, 2, 2); tree(V, 13, -2, 3, 2);
+    return V.tag(0.5, 9, -3, 'Тишина — никого за стеной').tag(1, 5, 1, 'Дом 100+ м² вместо квартиры').tag(-12, 4, 5, 'Парковка у ворот')
+      .tag(11, 5, 4, 'Двор для детей').tag(12, 8, -8, 'Своя баня').tag(9, 3, 0, 'Шашлык когда захотите')
+      .tag(-12.5, 3, -8, 'Огород и теплица').tag(15, 2, 8, 'Без УК и капремонта'); },
 };
+function phoneArt(V) {                                  // телефон стоймя, на экране — картинка дома
+  V.box(-5, 0, 0, 5, 19, 0, 'phone');
+  for (let u = 0; u < 9; u++) for (let v = 0; v < 16; v++) {
+    let c = 'sky';
+    if (v <= 2) c = GR;
+    else if (v <= 8 && u >= 1 && u <= 7) c = (u === 4 && v <= 5) ? 'door' : ((u === 2 || u === 3 || u === 5 || u === 6) && (v === 5 || v === 6)) ? 'glass2' : SA;
+    else if (v >= 9 && v <= 12 && Math.abs(u - 4) <= 12 - v) c = ROOF;
+    else if (u === 7 && v === 14) c = 'gold';
+    V.set(-4 + u, 2 + v, 0, c);
+  }
+  V.box(-1, 18, 0, 1, 18, 0, 'wire');
+  return V;
+}
 
 // ============================================================
 //  ТЕКСТЫ ПРЕЗЕНТАЦИЙ: боль → решение → итог с действием
 // ============================================================
-const TEL = '<a class="btn" href="tel:+79872779952">Позвонить: +7 987 277-99-52</a>';
+const TEL = '<a class="btn" href="tel:+79872779952">Позвонить</a>';
 const ARROW = '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3 8h10M9 4l4 4-4 4" fill="none" stroke="currentColor" stroke-width="1.5"/></svg>';
 const PRES = {
   tradein: { title: 'Trade-in · квартира в зачёт дома', slides: [
-    { s: 't1', k: 'Знакомо?', h: 'Квартира стала тесной, а&nbsp;продавать её&nbsp;— долго и&nbsp;нервно', p: 'Показы, торг, покупатели, которые пропадают в&nbsp;последний момент. А&nbsp;пока квартира не&nbsp;продана, дом не&nbsp;начать.' },
-    { s: 't2', k: 'Шаг 1', h: 'Оцениваем вашу квартиру', p: 'Смотрим квартиру и&nbsp;цены вокруг&nbsp;— и&nbsp;называем сумму, которую засчитаем в&nbsp;стоимость дома.' },
-    { s: 't3', k: 'Шаг 2', h: 'Квартира идёт в&nbsp;зачёт дома', p: 'Не&nbsp;нужно сначала продавать, а&nbsp;потом строить: стоимость квартиры становится частью оплаты. Остаток&nbsp;— ипотекой без первоначального взноса.' },
-    { s: 't4', k: 'Шаг 3', h: 'Строим кирпичный дом под&nbsp;ключ', p: 'По&nbsp;нашему проекту или по&nbsp;вашим фото: фундамент, стены, кровля, окна.' },
-    { s: 't5', k: 'Итог', h: 'Переезжаете в&nbsp;свой дом', p: 'Без поиска покупателя, показов и&nbsp;двух сделок подряд. Позвоните&nbsp;— скажем, сколько стоит ваша квартира в&nbsp;зачёт.',
-      cta: TEL + `<a class="link" href="#ipoteka">Рассчитать платёж ${ARROW}</a>` },
+    { s: 't1', k: 'Знакомо?', h: 'Квартира стала тесной?', p: 'А&nbsp;продавать её долго и&nbsp;нервно.' },
+    { s: 't2', k: 'Шаг 1', h: 'Оцениваем квартиру' },
+    { s: 't3', k: 'Шаг 2', h: 'Она идёт в&nbsp;зачёт дома', p: 'Остаток&nbsp;— ипотекой без взноса.' },
+    { s: 't4', k: 'Шаг 3', h: 'Строим дом под&nbsp;ключ' },
+    { s: 't5', k: 'Итог', h: 'Вы переезжаете', cta: TEL + `<a class="link" href="#ipoteka">Рассчитать платёж ${ARROW}</a>` },
   ] },
   land: { title: 'Земля · поможем с участком', slides: [
-    { s: 'l1', k: 'Знакомо?', h: 'Хотите свой дом, но&nbsp;нет участка?', p: 'Объявления, межевание, документы, свет и&nbsp;газ&nbsp;— искать землю самому долго, и&nbsp;страшно ошибиться.' },
-    { s: 'l2', k: 'Шаг 1', h: 'Подбираем землю под ваш бюджет и&nbsp;проект', p: 'Чтобы дом встал на&nbsp;участок без компромиссов, а&nbsp;до&nbsp;работы и&nbsp;школы было удобно ездить.' },
-    { s: 'l3', k: 'Шаг 2', h: 'Помогаем проверить свет, газ и&nbsp;документы', p: 'Смотрим, что можно подключить, как подъедет техника и&nbsp;всё&nbsp;ли в&nbsp;порядке с&nbsp;бумагами&nbsp;— до&nbsp;того, как вы заплатите.' },
-    { s: 'l4', k: 'Шаг 3', h: 'Ставим проект на&nbsp;участок', p: 'Разворачиваем дом к&nbsp;солнцу и&nbsp;виду, оставляем место под двор, парковку и&nbsp;баню.' },
-    { s: 'l5', k: 'Итог', h: 'Ваш дом&nbsp;— на&nbsp;вашей земле', p: 'Участок, проект и&nbsp;стройка&nbsp;— в&nbsp;одних руках. Позвоните&nbsp;— расскажем, с&nbsp;чего начать.',
-      cta: TEL + `<a class="link" href="#proekty">Посмотреть проекты ${ARROW}</a>` },
+    { s: 'l1', k: 'Знакомо?', h: 'Нет участка?' },
+    { s: 'l2', k: 'Шаг 1', h: 'Подберём землю', p: 'Под бюджет и&nbsp;проект.' },
+    { s: 'l3', k: 'Шаг 2', h: 'Проверим свет, газ и&nbsp;документы' },
+    { s: 'l4', k: 'Шаг 3', h: 'Поставим дом на&nbsp;участок' },
+    { s: 'l5', k: 'Итог', h: 'Ваш дом на&nbsp;вашей земле', cta: TEL + `<a class="link" href="#proekty">Проекты ${ARROW}</a>` },
   ] },
   refs: { title: 'Референсы · дом по вашим фото', slides: [
-    { s: 'r1', k: 'Знакомо?', h: 'Нашли дом мечты на&nbsp;фото, но&nbsp;не&nbsp;знаете, кто так построит?', p: 'Картинка из&nbsp;интернета, дом друзей, кадр из&nbsp;фильма&nbsp;— обычно на&nbsp;этом мечта и&nbsp;заканчивается.' },
-    { s: 'r2', k: 'Шаг 1', h: 'Пришлите фото&nbsp;— сделаем проект', p: 'Переносим дом с&nbsp;картинки в&nbsp;чертежи под ваш участок, семью и&nbsp;бюджет.' },
-    { s: 'r3', k: 'Шаг 2', h: 'Считаем всё до&nbsp;кирпича', p: 'Фундамент, стены, кровля&nbsp;— вы заранее знаете, из&nbsp;чего состоит дом и&nbsp;сколько он стоит.' },
-    { s: 'r4', k: 'Итог', h: 'Строим&nbsp;— как на&nbsp;картинке', p: 'Из&nbsp;кирпича и&nbsp;блоков, под ключ. Пришлите фото&nbsp;— обсудим ваш дом.',
-      cta: TEL + `<a class="link" href="#proekty">Наши проекты ${ARROW}</a>` },
+    { s: 'r1', k: 'Знакомо?', h: 'Нравится дом на&nbsp;фото?' },
+    { s: 'r2', k: 'Шаг 1', h: 'Сделаем по&nbsp;нему проект' },
+    { s: 'r3', k: 'Шаг 2', h: 'Посчитаем до&nbsp;кирпича' },
+    { s: 'r4', k: 'Итог', h: 'Построим как на&nbsp;картинке', cta: TEL },
   ] },
   ipoteka: { title: 'Ипотека · без первоначального взноса', slides: [
-    { s: 'i1', k: 'Знакомо?', h: 'Копите на&nbsp;первый взнос, а&nbsp;цены растут быстрее?', p: 'Пока откладываете, дом дорожает, а&nbsp;аренда или тесная квартира съедают годы.' },
-    { s: 'i2', k: 'Решение', h: 'Ипотека без первоначального взноса', p: 'Подбираем программу, где первый взнос не&nbsp;нужен, и&nbsp;помогаем пройти одобрение. Поручитель на&nbsp;время стройки не&nbsp;нужен.' },
-    { s: 'i3', k: 'Платёж', h: 'Платёж понятен заранее', p: 'Цена дома и&nbsp;срок&nbsp;— и&nbsp;сразу видно, сколько платить в&nbsp;месяц. Посчитать можно прямо на&nbsp;сайте.' },
-    { s: 'i4', k: 'Итог', h: 'Живёте в&nbsp;своём доме, а&nbsp;не&nbsp;копите на&nbsp;него', p: 'Рассчитайте платёж или позвоните&nbsp;— подберём программу под вас.',
-      cta: `<a class="btn" href="#ipoteka">Рассчитать платёж</a><a class="link" href="tel:+79872779952">+7 987 277-99-52 ${ARROW}</a>` },
+    { s: 'i1', k: 'Знакомо?', h: 'Нет денег на&nbsp;взнос?' },
+    { s: 'i2', k: 'Решение', h: 'Ипотека без взноса', p: 'Поручитель на&nbsp;время стройки не&nbsp;нужен.' },
+    { s: 'i3', k: 'Платёж', h: 'Платёж известен заранее' },
+    { s: 'i4', k: 'Итог', h: 'Живите в&nbsp;своём доме', cta: `<a class="btn" href="#ipoteka">Рассчитать платёж</a><a class="link" href="tel:+79872779952">Позвонить ${ARROW}</a>` },
   ] },
 };
 
@@ -331,10 +368,10 @@ function chamferBox(THREE, c) {
   return g;
 }
 
-function makeEngine(THREE, canvas) {
-  const N = 2600;
+function makeEngine(THREE, canvas, opts = {}) {
+  const N = 2600, still = !!opts.still;
   const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: true, powerPreference: 'high-performance' });
-  renderer.setPixelRatio(Math.min(devicePixelRatio || 1, 2));
+  renderer.setPixelRatio(opts.dpr || Math.min(devicePixelRatio || 1, 2));
   renderer.outputEncoding = THREE.sRGBEncoding;
   renderer.toneMapping = THREE.ACESFilmicToneMapping; renderer.toneMappingExposure = 1.02;
   renderer.shadowMap.enabled = true; renderer.shadowMap.type = THREE.VSMShadowMap;
@@ -486,16 +523,22 @@ function makeEngine(THREE, canvas) {
     snapView = false;
     for (const key of ['cx', 'cy', 'cz', 'R']) view[key] += (aim[key] - view[key]) * k;
     mx += (tmx - mx) * (1 - Math.exp(-dt * 3)); my += (tmy - my) * (1 - Math.exp(-dt * 3));
-    const az = THREE.MathUtils.degToRad(38 + Math.sin(now * 0.22) * 5 + mx * 5), el = THREE.MathUtils.degToRad(27 - my * 3);
+    const az = THREE.MathUtils.degToRad(38 + (still ? 0 : Math.sin(now * 0.22) * 5 + mx * 5)), el = THREE.MathUtils.degToRad(still ? 27 : 27 - my * 3);
     const fov = THREE.MathUtils.degToRad(cam.fov), half = Math.atan(Math.tan(fov / 2) * reg.size);
-    const d = view.R * 0.8 / Math.sin(half);
+    const d = view.R * (opts.fit || 0.8) / Math.sin(half);
     cam.position.set(view.cx + d * Math.cos(el) * Math.sin(az), view.cy + d * Math.sin(el), view.cz + d * Math.cos(el) * Math.cos(az));
     cam.lookAt(view.cx, view.cy, view.cz);
     cam.setViewOffset(W, H, W / 2 - reg.cx * W, H / 2 - reg.cy * H, W, H);
     sun.position.set(view.cx - 12, view.cy + 30, view.cz + 17); sun.target.position.set(view.cx, view.cy, view.cz);
     renderer.render(scene, cam);
   }
-  return { goTo, reset, resize, frame, pointer, project, snap() { snapView = true; }, dispose() { renderer.dispose(); } };
+  return {
+    goTo, reset, resize, frame, pointer, project, canvas,
+    snap() { snapView = true; },
+    finish() { t0 = clock() - 1000; tEnd = clock() - 1; dirty = true; snapView = true; },   // сразу конечное состояние
+    get building() { return clock() <= tEnd; },
+    dispose() { renderer.dispose(); renderer.forceContextLoss(); },
+  };
 }
 
 // ============================================================
@@ -548,7 +591,7 @@ function buildDOM() {
     else if (Math.abs(dx) > 60) go(idx + Math.sign(dx));
   });
   el.addEventListener('pointermove', (e) => { if (eng) eng.pointer(e.clientX / innerWidth * 2 - 1, e.clientY / innerHeight * 2 - 1); });
-  addEventListener('resize', () => { if (opened) layout(); });
+  addEventListener('resize', () => { if (opened) { layout(); relayTags(tags); } });
   addEventListener('keydown', (e) => {
     if (!opened) return;
     if (e.key === 'Escape') { close(); return; }
@@ -583,14 +626,40 @@ function layout() {
   if (eng) eng.resize(W, H, r);
 }
 
-function renderTags(now) {
-  const show = now > tagsAt;
-  for (const t of tags) {
-    const [x, y, ok] = eng.project(t.x, t.y + 0.9, t.z);
-    t.el.style.transform = `translate(${x.toFixed(1)}px,${(y - 18).toFixed(1)}px) translate(-50%,-100%)`;
-    t.el.classList.toggle('on', show && ok);
+// подписи к сцене: точка в 3D → экран; раскладку (кто выше, чтобы не наезжали) считаем один раз при появлении
+function makeTag(layer, t, n) {
+  const s = document.createElement('span');
+  s.className = 'pz-tag'; s.innerHTML = `<b>${n}</b><em>${t.t}</em>`;
+  layer.appendChild(s);
+  return { ...t, el: s, dy: 0, laid: false };
+}
+function placeTags(engine, list, show, lift = 18) {
+  const pts = list.map((t) => { const [x, y, ok] = engine.project(t.x, t.y + 0.9, t.z); return { t, x, y, ok }; });
+  if (show && list.some((t) => !t.laid)) {
+    const boxes = [];
+    pts.slice().sort((a, b) => b.y - a.y).forEach((p) => {
+      const w = p.t.el.offsetWidth || 120, h = p.t.el.offsetHeight || 26;
+      let top = p.y - lift - h;
+      for (let g = 0; g < 14; g++) {
+        const hit = boxes.find((b) => Math.abs(b.x - p.x) < (b.w + w) / 2 + 8 && top < b.y1 + 6 && top + h > b.y0 - 6);
+        if (!hit) break;
+        top = hit.y0 - 8 - h;
+      }
+      boxes.push({ x: p.x, w, y0: top, y1: top + h });
+      p.t.dy = p.y - lift - h - top; p.t.h = h; p.t.w = w; p.t.laid = true;
+    });
+  }
+  for (const p of pts) {
+    const top = p.y - lift - (p.t.h || (p.t.h = p.t.el.offsetHeight)) - p.t.dy;
+    const hw = (p.t.w || (p.t.w = p.t.el.offsetWidth)) / 2, cw = p.t.el.parentNode.clientWidth;
+    const x = cw > hw * 2 + 12 ? Math.min(Math.max(p.x, hw + 6), cw - hw - 6) : p.x;   // подпись не вылезает за край экрана
+    p.t.el.style.transform = `translate(${x.toFixed(1)}px,${top.toFixed(1)}px) translate(-50%,0)`;
+    p.t.el.style.setProperty('--stem', (lift + p.t.dy).toFixed(0) + 'px');
+    p.t.el.classList.toggle('on', show && p.ok);
   }
 }
+const relayTags = (list) => list.forEach((t) => { t.laid = false; });
+function renderTags(now) { placeTags(eng, tags, now > tagsAt); }
 function loop() {
   raf = requestAnimationFrame(loop);
   if (!eng) return;
@@ -616,7 +685,7 @@ function go(i) {
   if (eng) {
     const V = shape(cur.slides[i].s), dur = eng.goTo(V);
     tagsAt = performance.now() + Math.max(600, dur * 1000 - 250);
-    tags = V.tags.map((t) => { const s = document.createElement('span'); s.className = 'pz-tag'; s.textContent = t.t; layer.appendChild(s); return { ...t, el: s }; });
+    tags = V.tags.map((t, k) => makeTag(layer, t, k + 1));
   }
 }
 
@@ -634,7 +703,7 @@ function open(key, ox, oy) {
   el.setAttribute('aria-label', P.title);
   el.querySelector('.pz-text').innerHTML = P.slides.map((s, k) => `<div class="pz-s" aria-hidden="true">
       <p class="mono pz-k">${String(k + 1).padStart(2, '0')} / ${String(P.slides.length).padStart(2, '0')} · ${s.k}</p>
-      <h2>${s.h}</h2><p class="pz-p">${s.p}</p>${s.cta ? `<div class="pz-cta">${s.cta}</div>` : ''}</div>`).join('');
+      <h2>${s.h}</h2>${s.p ? `<p class="pz-p">${s.p}</p>` : ''}${s.cta ? `<div class="pz-cta">${s.cta}</div>` : ''}</div>`).join('');
   el.querySelector('.pz-dots').innerHTML = P.slides.map((s, k) => `<li><button type="button" data-i="${k}" aria-label="Слайд ${k + 1}"></button></li>`).join('');
   el.classList.remove('moved');
   el.style.setProperty('--ox', (ox != null ? ox : innerWidth / 2) + 'px');
@@ -672,5 +741,84 @@ document.addEventListener('keydown', (e) => {
   const t = e.target.closest && e.target.closest('.perk[data-pres]');
   if (t && e.target === t && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); const r = t.getBoundingClientRect(); open(t.dataset.pres, r.left + r.width / 2, r.top + r.height / 2); }
 });
+
+// ============================================================
+//  КАРТИНКИ КАРТОЧЕК УСЛОВИЙ: одна сцена в фоне рисует каждую картинку и отдаёт её как <img>
+// ============================================================
+(() => {
+  const slots = Array.from(document.querySelectorAll('.perk-img[data-pv]'));
+  if (!slots.length || !window.THREE || !('IntersectionObserver' in window)) return;
+  let done = false;
+  const draw = () => {
+    if (done) return; done = true;
+    let E;
+    try { E = makeEngine(window.THREE, document.createElement('canvas'), { still: true, dpr: 1, fit: 0.7 }); }
+    catch (err) { console.error('[БАЙДОМ] картинки карточек не нарисовались:', err); return; }
+    const W = 880, H = 660;
+    E.resize(W, H, { cx: 0.5, cy: 0.52, size: Math.min(1, (W / H) / 1.5) * 0.98 });
+    const next = (i) => {
+      if (i >= slots.length) { E.dispose(); return; }
+      const slot = slots[i];
+      E.reset(); E.goTo(shape(slot.dataset.pv)); E.finish(); E.frame();
+      let url = '';
+      try { url = E.canvas.toDataURL('image/webp', 0.92); } catch (err) { url = ''; }
+      if (url) {
+        const im = new Image(); im.alt = ''; im.decoding = 'async'; im.src = url;
+        im.onload = () => slot.classList.add('ready');
+        slot.insertBefore(im, slot.firstChild);
+      }
+      setTimeout(() => next(i + 1), 30);                // по одной, чтобы не подвешивать прокрутку
+    };
+    next(0);
+  };
+  const io = new IntersectionObserver((es) => { if (es.some((e) => e.isIntersecting)) { io.disconnect(); draw(); } }, { rootMargin: '900px 0px' });
+  slots.forEach((s) => io.observe(s));
+})();
+
+// ============================================================
+//  «СВОЙ ДОМ ВМЕСТО КВАРТИРЫ»: двор собирается из кубиков, когда до него долистали, и появляются метки-выгоды
+// ============================================================
+(() => {
+  const box = document.querySelector('.plusy-scene');
+  if (!box) return;
+  const cv = box.querySelector('.plusy-gl'), layer = box.querySelector('.plusy-tags');
+  if (!window.THREE || !('IntersectionObserver' in window)) { box.classList.add('no3d'); return; }
+  let E = null, list = [], vis = false, built = false, rq = 0, at = Infinity;
+  const fit = () => {
+    if (!E) return;
+    const r = box.getBoundingClientRect();
+    E.resize(r.width, r.height, { cx: 0.5, cy: 0.5, size: Math.min(1, (r.width / r.height) / 1.5) * 0.98 });
+    relayTags(list);
+  };
+  const tick = () => {
+    rq = 0;
+    if (!vis || !E) return;
+    rq = requestAnimationFrame(tick);
+    if (html.classList.contains('pz-open')) return;
+    E.frame();
+    placeTags(E, list, performance.now() > at, innerWidth <= 760 ? 10 : 18);
+  };
+  const io = new IntersectionObserver(([e]) => {
+    vis = e.isIntersecting;
+    if (vis && !E) {
+      try { E = makeEngine(window.THREE, cv, { fit: 0.66 }); } catch (err) { console.error('[БАЙДОМ] двор не запустился:', err); box.classList.add('no3d'); vis = false; return; }
+      fit(); E.reset(); E.snap();
+      new ResizeObserver(fit).observe(box);
+    }
+    if (vis && !built && e.intersectionRatio > 0.25) {
+      built = true;
+      const V = shape('diorama'), dur = E.goTo(V);
+      E.snap();
+      list = V.tags.map((t, k) => makeTag(layer, t, k + 1));
+      at = performance.now() + dur * 1000 - 300;
+      list.forEach((t, k) => { t.el.style.transitionDelay = (k * 0.12).toFixed(2) + 's'; });
+    }
+    if (vis && !rq) rq = requestAnimationFrame(tick);
+  }, { threshold: [0, 0.25, 0.5] });
+  io.observe(box);
+  box.addEventListener('pointermove', (e) => { if (!E) return; const r = box.getBoundingClientRect(); E.pointer((e.clientX - r.left) / r.width * 2 - 1, (e.clientY - r.top) / r.height * 2 - 1); });
+  box.addEventListener('pointerleave', () => { if (E) E.pointer(0, 0); });
+})();
+
 window.BDPres = { open, close, go: (i) => go(i) };
 })();

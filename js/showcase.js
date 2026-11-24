@@ -10,7 +10,7 @@ const houseBtns = Array.from(sc.querySelectorAll('.sc-house'));
 const chipsEl = sc.querySelector('.sc-chips'), nameEl = sc.querySelector('.sc-name');
 const playBtn = sc.querySelector('.sc-play'), wantBtn = sc.querySelector('.sc-want'), prog = sc.querySelector('.sc-prog');
 const stage = sc.closest('.stage');
-const DWELL = 9000;                          // сколько показываем каждый проект, мс
+const DWELL = 8000;                          // сколько показываем готовый проект, мс (пока дом строится — не считаем)
 let house = 0, auto = true, built = false, acc = 0, last = performance.now(), HOUSES = null;
 
 function renderChips() {
@@ -34,7 +34,7 @@ function init() { if (window.BD3D && !HOUSES) { HOUSES = window.BD3D.houses; sho
 (function tick(now) {
   requestAnimationFrame(tick);
   const dt = Math.min(100, now - last); last = now;
-  const running = auto && built && !document.hidden && !(stage && stage.classList.contains('scrolled')) && !document.documentElement.classList.contains('want-open');
+  const running = auto && built && !(window.BD3D && window.BD3D.busy) && !document.hidden && !(stage && stage.classList.contains('scrolled')) && !document.documentElement.classList.contains('want-open');
   if (running) acc += dt;
   prog.style.transform = `scaleX(${Math.min(1, acc / DWELL).toFixed(4)})`;
   if (acc >= DWELL && window.BD3D) { acc = 0; window.BD3D.setHouse(1 - window.BD3D.house); }

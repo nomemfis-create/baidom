@@ -194,6 +194,7 @@ let demoT0 = -1, camBlend = 1, camDemoK = 1, camScrollP = 0, lastHK = '';
 // 101 → 118: стройка 101 «отматывается» к чертежу, участок с газоном и деревьями остаётся; 118 вырастает снизу вверх.
 // 118 → 101: 118 уходит сверху вниз, 101 снова строится. При прокрутке к этапам всегда 101.
 let houseCur = 0, houseTo = 0, hsT0 = -1, hsPending = -1, heroP101 = DEMO.end, r118 = 0, r118eff = 0, H118stats = null;
+let hide101 = 0, hide101eff = 0;
 function setHouse(i) {
   i = i ? 1 : 0;
   if (!builtSent) return;
@@ -206,14 +207,16 @@ function stepHouse(now) {
   if (hsT0 === -1) return;
   if (hsT0 === -2) hsT0 = now;
   const t = (now - hsT0) / 1000;
-  if (houseTo === 1) {
-    heroP101 = lerp(DEMO.end, 0.06, easeIO(clamp(t / 1.4)));
-    r118 = easeIO(clamp((t - 1.0) / 1.7));
-    if (t >= 2.75) { houseCur = 1; hsT0 = -1; }
-  } else {
-    r118 = 1 - easeIO(clamp(t / 0.9));
-    heroP101 = lerp(0.06, DEMO.end, easeIO(clamp((t - 0.55) / 2.3)));
-    if (t >= 2.9) { houseCur = 0; hsT0 = -1; heroP101 = DEMO.end; }
+  if (houseTo === 1) {                       // 101 разбирается, потом у 118: чертёж → фундамент → стены и кровля → участок
+    heroP101 = lerp(DEMO.end, 0.04, easeIO(clamp(t / 1.4)));
+    hide101 = easeIO(clamp(t / 0.6));
+    r118 = clamp((t - 1.15) / 3.9);
+    if (t >= 5.1) { houseCur = 1; hsT0 = -1; r118 = 1; }
+  } else {                                   // 118 уходит, у 101 проступает свой чертёж, и дом строится заново
+    r118 = 1 - clamp(t / 1.3);
+    hide101 = 1 - easeIO(clamp((t - 0.8) / 0.6));
+    heroP101 = lerp(0.04, DEMO.end, easeIO(clamp((t - 1.1) / 3.6)));
+    if (t >= 4.75) { houseCur = 0; hsT0 = -1; heroP101 = DEMO.end; hide101 = 0; }
   }
   if (hsT0 === -1 && hsPending >= 0) { const q = hsPending; hsPending = -1; setHouse(q); }
 }
@@ -245,7 +248,7 @@ function uiLoop(now) {
     p3 = lerp(houseP, pS, camBlend); siteP = lerp(demoP, pS, camBlend);
     if (camDemoK >= 1 && !builtSent) { builtSent = true; document.dispatchEvent(new Event('bd:built')); }   // дом достроен — можно листать варианты
   }
-  r118eff = r118 * (1 - camBlend);
+  r118eff = r118 * (1 - camBlend); hide101eff = hide101 * (1 - camBlend);
   const hk = (1 - camBlend).toFixed(3);                     // «первый экран»: шкала этапов проявляется, когда начинают листать
   if (hk !== lastHK) { stageEl.style.setProperty('--hk', hk); stageEl.classList.toggle('scrolled', camBlend > 0.5); lastHK = hk; }
   hud(pS, p3);
@@ -294,7 +297,7 @@ function init3D(THREE) {
     draw: u(0), planA: u(1), fillA: u(0), lineK: u(1), slabX: u(-1e3),
     bC: u(-9), kC: u(-9), wC: u(-9), aC: u(-9), pC: u(-9), mY: u(-1), lY: u(-1), eave: u(0),
     roofY: u(-10), membY: u(-10), soil: u(0), lawn: u(0), found: u(0), lights: u(0), time: u(0),
-    lamps: u([new V3(0, -9, 0), new V3(0, -9, 0), new V3(0, -9, 0), new V3(0, -9, 0)]),
+    lamps: u([new V3(0, -9, 0), new V3(0, -9, 0), new V3(0, -9, 0), new V3(0, -9, 0)]), lampK: u(1), gK1: u(0), gK2: u(1),
     varA: u(new V3(1, 1, 1)), varB: u(new V3(1, 1, 1)), tintA: u(0), tintB: u(0), varT: u(0), bandA: u(0), bandB: u(0), clip118: u(-10),
   };
   const SHARED = {
@@ -632,11 +635,11 @@ float varEdge(float y){
   const paper = new THREE.Color(PAPER_HEX);
   const ground = new THREE.Mesh(new THREE.PlaneGeometry(240, 240), new THREE.ShaderMaterial({
     defines: SHARED,
-    uniforms: { uPaper: u(new V3(paper.r, paper.g, paper.b)), uSoil: U.soil, uLawn: U.lawn, uFound: U.found, uLights: U.lights, uLamp: U.lamps },
+    uniforms: { uPaper: u(new V3(paper.r, paper.g, paper.b)), uSoil: U.soil, uLawn: U.lawn, uFound: U.found, uLights: U.lights, uLamp: U.lamps, uLampK: U.lampK },
     vertexShader: 'varying vec3 vW; void main(){ vec4 w = modelMatrix * vec4(position, 1.0); vW = w.xyz; gl_Position = projectionMatrix * viewMatrix * w; }',
     fragmentShader: `
 varying vec3 vW;
-uniform vec3 uPaper; uniform float uSoil, uLawn, uFound, uLights; uniform vec3 uLamp[4];
+uniform vec3 uPaper; uniform float uSoil, uLawn, uFound, uLights, uLampK; uniform vec3 uLamp[4];
 float h1(vec2 p){ return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
 float vn(vec2 p){ vec2 i = floor(p), f = fract(p); f = f * f * (3.0 - 2.0 * f);
   return mix(mix(h1(i), h1(i + vec2(1.0, 0.0)), f.x), mix(h1(i + vec2(0.0, 1.0)), h1(i + vec2(1.0, 1.0)), f.x), f.y); }
@@ -668,7 +671,7 @@ void main(){
   col *= 1.0 - (1.0 - smoothstep(0.0, 0.9, dH)) * step(0.0, dH) * 0.2 * uFound;
   vec3 glow = vec3(0.0);
   for (int i = 0; i < 4; i++){ vec2 d = p - uLamp[i].xz; glow += vec3(1.0, 0.7, 0.4) * exp(-dot(d, d) * 1.4); }
-  col += glow * uLights * 0.2 * lawnM;
+  col += glow * uLights * 0.2 * lawnM * uLampK;
   col = mix(col, uPaper, smoothstep(16.0, 30.0, r));
   gl_FragColor = vec4(col, 1.0);
 }`,
@@ -1305,7 +1308,7 @@ void main(){
   const paverMats = masonryMat(TX.concrete, '#ffffff', U.pC, 'paver', 0.4, { noAO: true });
   const paverMesh = instanced(chamferBox(0.2, 0.06, 0.1, 0.006, 2), paverMats, pavers, false);
   const PAVER_ROWS = Math.ceil(4.9 / 0.104);
-  const bollards = [];
+  const bollards = [], LAMPS101 = [];
   {
     const cx = wx(6.05), zs = [wz(D + 1.9), wz(D + 4.4)];
     const capMat = new THREE.MeshStandardMaterial({ color: lin('#f6efe2'), emissive: lin('#ffbe78'), emissiveIntensity: 0, roughness: 0.35 });
@@ -1315,7 +1318,7 @@ void main(){
       const post = new THREE.Mesh(new THREE.CylinderGeometry(0.055, 0.06, 0.55, 16), anth); post.position.y = 0.275; post.castShadow = true; g.add(post);
       const head = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.05, 0.06, 16), capMat); head.position.y = 0.5; g.add(head);
       g.scale.setScalar(1e-3); g.visible = false; scene.add(g);
-      U.lamps.value[i++].set(g.position.x, 0, g.position.z);
+      U.lamps.value[i++].set(g.position.x, 0, g.position.z); LAMPS101.push(new V3(g.position.x, 0, g.position.z));
       bollards.push({ g, capMat });
     }
   }
@@ -1356,15 +1359,18 @@ void main(){
     const ss = (a, b, x) => { const t = clamp((x - a) / (b - a)); return t * t * (3 - 2 * t); };
     const GR = ['#4d6c30', '#587937', '#486630', '#61813e', '#6a8a44'].map(lin), DRY = lin('#7f8448');
     const mesh = new THREE.InstancedMesh(grassTuft, null, count);
-    const aD = new Float32Array(count);
+    const aD = new Float32Array(count), aK = new Float32Array(count);
+    // 118: цоколь 15,98 × 9,09 м, крыльцо и дорожка к калитке (x = −0,94)
+    const sd118 = (x, z) => { const dx = Math.abs(x) - 8.03, dz = Math.abs(z) - 4.585; return Math.hypot(Math.max(dx, 0), Math.max(dz, 0)) + Math.min(Math.max(dx, dz), 0); };
     const m = new M4(), q = new Q(), sc = new V3(), pos = new V3(), up = new V3(0, 1, 0);
     let n = 0, tries = 0;
     while (n < count && tries < count * 8) {
       tries++;
       const x = (R() * 2 - 1) * (hx + 7.4), z = (R() * 2 - 1) * (hz + 7.4);
       const dH = sdBox(x, z);
-      if (dH < 0.9) continue;                                                     // дом, отмостка, крыльцо
-      if (Math.abs(x - pathX) < 0.97 && z > pz0 && z < pz1) continue;             // дорожка с бордюром
+      const in101 = dH < 0.9 || (Math.abs(x - pathX) < 0.97 && z > pz0 && z < pz1);   // дом 101, отмостка, дорожка
+      const in118 = sd118(x, z) < 0.9 || (Math.abs(x + 0.94) < 0.97 && z > 4.5 && z < 10.5);
+      if (in101 && in118) continue;
       if (R() > 1 - ss(4.5, 6.4, dH + (R() - 0.5) * 0.9)) continue;               // пушистый край газона
       const s = 0.75 + R() * 0.6;
       q.setFromAxisAngle(up, R() * Math.PI * 2);
@@ -1373,17 +1379,19 @@ void main(){
       const c = (R() < 0.04 ? DRY : GR[Math.floor(R() * GR.length)]).clone().multiplyScalar(stripe * (0.85 + R() * 0.3));
       mesh.setColorAt(n, c);
       aD[n] = dH + R() * 0.7;
+      aK[n] = in101 ? 1 : in118 ? 2 : 0;
       n++;
     }
     mesh.count = n;
     grassTuft.setAttribute('aD', new THREE.InstancedBufferAttribute(aD, 1));
+    grassTuft.setAttribute('aK', new THREE.InstancedBufferAttribute(aK, 1));
     const mat = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.96, metalness: 0, side: THREE.DoubleSide, envMapIntensity: 0.2 });
     patch(mat, 'bd-grass', {
-      uniforms: { uLawn: U.lawn, uTime: U.time },
-      vHead: 'attribute float aH;\nattribute float aD;\nuniform float uLawn;\nuniform float uTime;\nvarying float vH;',
+      uniforms: { uLawn: U.lawn, uTime: U.time, uK1: U.gK1, uK2: U.gK2 },
+      vHead: 'attribute float aH;\nattribute float aD;\nattribute float aK;\nuniform float uLawn;\nuniform float uTime;\nuniform float uK1, uK2;\nvarying float vH;',
       vNormal: 'objectNormal = vec3(0.0, 1.0, 0.0);',
       vBegin: `
-  float gk = smoothstep(aD - 1.4, aD + 0.6, uLawn * 9.0);
+  float gk = smoothstep(aD - 1.4, aD + 0.6, uLawn * 9.0) * (aK < 0.5 ? 1.0 : (aK < 1.5 ? uK1 : uK2));
   transformed.y *= gk;
   transformed.xz *= mix(0.3, 1.0, gk);
   vec3 gp = (instanceMatrix * vec4(0.0, 0.0, 0.0, 1.0)).xyz;
@@ -1496,7 +1504,7 @@ void main(){
   [[-4.7, 7.25, 0.62], [-3.5, 7.4, 0.5], [3.4, 7.35, 0.55], [4.8, 7.2, 0.65], [7.3, 2.2, 0.55], [7.25, 0.9, 0.45]].forEach(([x, z, s], i) => {
     plant(leafTree({ h: s * 1.6, r: s, ry: s * 0.75, seed: 90 + i, mats: MATS.bush, bark: barkMat, n: 170, size: 0.36, light: BUSH_L, dark: BUSH_D, trunkR: 0.02 }), x, z, i);
   });
-  flora.slice(-2).forEach((f) => { f.side = true; });
+  flora.slice(-6).forEach((f) => { f.side = true; });
 
   // ============================================================
   //  СВЕТ И НЕБО ДЛЯ ОТРАЖЕНИЙ
@@ -1635,7 +1643,7 @@ void main(){
     U.time.value = now / 1000;
     U.draw.value = draw * 1.02;
     const q = Math.max(p, ps);                               // участок: газон, отмостка, деревья, вечер
-    const planA = 1 - sg(q, 'planOut');
+    const planA = (1 - sg(p, 'planOut')) * (1 - hide101eff);          // чертёж 101 не показываем, пока стоит 118
     const kS = easeIO(sg(p, 'slab'));
     U.planA.value = planA;
     U.fillA.value = seg(draw, 0.55, 0.85) * 0.42 * planA * (1 - kS);
@@ -1687,15 +1695,17 @@ void main(){
       wn.glass.emissiveIntensity = L * wn.lightK * 0.2;
     }
     if (doorLamp) doorLamp.lampMat.emissiveIntensity = L * 3;
-    porchLight.intensity = L * 2.6;
-    const kF = sg(q, 'fin');
+    porchLight.intensity = L * 2.6 * (1 - hide101eff);
+    const kF = sg(p, 'fin');                                          // отмостка, дорожка, фонарики — у каждого дома свои
     site.visible = kF > 0; site.position.y = -0.12 * (1 - easeOut(kF));
     U.pC.value = kF * (PAVER_ROWS + 4) - 1;
     paverMesh.visible = kF > 0;
     bollards.forEach((b, i) => { const k = clamp((kF - 0.4 - i * 0.1) / 0.3); b.g.visible = k > 0; b.g.scale.setScalar(Math.max(1e-3, backOut(k))); b.capMat.emissiveIntensity = L * 2.5; });
     const kT = sg(q, 'trees');
+    U.gK1.value = hide101eff;                                          // трава на месте участка 101
+    U.gK2.value = 1 - clamp(r118eff / 0.12);                           // трава под участком 118
     for (const f of flora) {
-      const k = clamp((kT - f.d * 0.6) / 0.4), hide = f.side ? 1 - r118eff : 1;   // кусты справа стоят там, где у 118 стена
+      const k = clamp((kT - f.d * 0.6) / 0.4), hide = f.side ? 1 - hide101eff : 1;   // кусты 101 — только при доме 101
       f.g.visible = k > 0 && hide > 0.01; f.g.scale.setScalar(Math.max(1e-3, backOut(k) * hide));
     }
     sun.intensity = lerp(1.8, 1.3, L);
@@ -1733,12 +1743,13 @@ void main(){
   }
 
   // ============================================================
-  //  ДОМ 101: ВАРИАНТЫ ФАСАДА. «Как в проекте» — песочный кирпич, белый пояс над окнами, светлая кровля, белые свесы.
+  //  ДОМ 101: ВАРИАНТЫ ФАСАДА. По умолчанию — красный кирпич с тёмной кровлей.
+  //  «Как в проекте» — светлый кирпич, белый пояс над окнами и белые свесы, кровля тёмная.
   //  Смена — волной снизу вверх (~1,8 с): кирпич и пояс по шейдеру, швы/свесы/рамы/кровля догоняют.
   // ============================================================
   const P101 = [
-    { name: 'Как в проекте', brick: '#c9a87c', band: 1, mortar: '#d8d1c4', roof: '#8b8f94', trim: '#f0ede7', frame: '#2a2e32' },
     { name: 'Красный кирпич', brick: null, band: 0, mortar: '#5a5550', roof: '#34383c', trim: '#2a2e32', frame: '#2a2e32' },
+    { name: 'Как в проекте', brick: '#d9c6a6', band: 1, mortar: '#e4ded2', roof: '#33373c', trim: '#f0ede7', frame: '#2a2e32' },
     { name: 'Графит', brick: '#3c3e42', band: 0, mortar: '#bdb7ad', roof: '#1f2225', trim: '#141517', frame: '#141517' },
     { name: 'Терракота', brick: '#b2603a', band: 1, mortar: '#d2c8b9', roof: '#4b2a20', trim: '#efe9e0', frame: '#3a2a22' },
   ];
@@ -1793,7 +1804,7 @@ void main(){
       U.varA.value.copy(VC[varCur].tint); U.tintA.value = VC[varCur].use; setBandUniforms();
     }
   }
-  // старт — «как в проекте», без волны
+  // старт — красный кирпич, без волны
   varCur = varNext = 0;
   U.varA.value.copy(VC[0].tint); U.tintA.value = VC[0].use; U.varB.value.copy(VC[0].tint); U.tintB.value = VC[0].use; setBandUniforms();
   applyVarColors(1);
@@ -1875,10 +1886,10 @@ void main(){
     ];
     const lift = (hex, k) => lin(hex).multiplyScalar(k);   // текстуры светлые — цвет материала чуть приподнимаем
     const clipUni = { uClip: U.clip118 };
-    const clipPatch = (m, key) => patch(m, 'bd-118-' + key, {
+    const clipPatch = (m, key, glow = true) => patch(m, 'bd-118-' + key, {
       defines: SHARED, uniforms: clipUni, vHead: 'varying vec3 vWP;', vEnd: WP_END,
       fHead: 'varying vec3 vWP;\nuniform float uClip;', fStart: 'if (vWP.y > uClip) discard;',
-      fEmis: 'totalEmissiveRadiance += ACCENT_LIN * (1.0 - smoothstep(0.0, 0.1, uClip - vWP.y)) * step(uClip, 50.0) * 1.3;',
+      fEmis: glow ? 'totalEmissiveRadiance += ACCENT_LIN * (1.0 - smoothstep(0.0, 0.1, uClip - vWP.y)) * step(uClip, 50.0) * 1.3;' : '',
     });
     const depthMat = patch(new THREE.MeshDepthMaterial({ depthPacking: THREE.RGBADepthPacking }), 'bd-118-depth', {
       uniforms: clipUni, vHead: 'varying vec3 vWP;', vEnd: WP_END, fHead: 'varying vec3 vWP;\nuniform float uClip;', fStart: 'if (vWP.y > uClip) discard;',
@@ -1887,7 +1898,7 @@ void main(){
       brick: clipPatch(new THREE.MeshStandardMaterial({ map: brickT.map, normalMap: brickT.normal, normalScale: new THREE.Vector2(0.85, 0.85), roughness: 0.86, envMapIntensity: 0.4 }), 'brick'),
       wood: clipPatch(new THREE.MeshStandardMaterial({ map: woodT.map, normalMap: woodT.normal, normalScale: new THREE.Vector2(0.6, 0.6), roughness: 0.62, envMapIntensity: 0.5 }), 'wood'),
       band: clipPatch(new THREE.MeshStandardMaterial({ map: brickT.map, normalMap: brickT.normal, roughness: 0.85, envMapIntensity: 0.35 }), 'band'),
-      plinth: clipPatch(pbr(TX.concrete, '#9b968f'), 'plinth'),
+      plinth: clipPatch(pbr(TX.concrete, '#9b968f'), 'plinth', false),   // у цоколя верх — большая плоскость, без подсветки края
       roof: clipPatch(new THREE.MeshStandardMaterial({ map: roofT.map, normalMap: roofT.normal, normalScale: new THREE.Vector2(1.1, 1.1), roughness: 0.42, metalness: 0.55, envMapIntensity: 1.0, side: THREE.DoubleSide }), 'roof'),
       trim: clipPatch(new THREE.MeshStandardMaterial({ color: lin('#1a1b1d'), roughness: 0.45, metalness: 0.4, envMapIntensity: 0.9 }), 'trim'),
       frame: clipPatch(new THREE.MeshStandardMaterial({ color: lin('#17181a'), roughness: 0.4, metalness: 0.3, envMapIntensity: 0.9 }), 'frame'),
@@ -2024,6 +2035,82 @@ void main(){
     add(GB, M.brick); add(GW, M.wood); add(GR, M.band); add(GP, M.plinth); add(GF, M.frame); add(GT, M.trim); add(GD, M.door); add(GS, M.soffit, false);
     g.traverse((o) => { if (o.isMesh) o.customDepthMaterial = depthMat; });
 
+    // --- чертёж 118: наружный и внутренний контур стен, колонна, размерные линии; рисуется линия за линией ---
+    const planMat = new THREE.MeshBasicMaterial({ color: lin('#1b1c1e'), transparent: true, opacity: 0, depthWrite: false });
+    const planG = new THREE.Group(); planG.visible = false; scene.add(planG);
+    const plan = [];
+    const pline = (x0, z0, x1, z1, wd) => {
+      const len = Math.hypot(x1 - x0, z1 - z0);
+      const m = new THREE.Mesh(new THREE.BoxGeometry(1, 0.004, wd).translate(0.5, 0, 0), planMat);
+      m.position.set(x0, 0.012, z0); m.rotation.y = -Math.atan2(z1 - z0, x1 - x0); m.scale.x = 1e-3; m.renderOrder = 2;
+      planG.add(m); plan.push({ m, len });
+    };
+    const poly = (pts, wd) => pts.forEach((a, i) => { const b = pts[(i + 1) % pts.length]; pline(a[0], a[1], b[0], b[1], wd); });
+    poly([[-HX, HZ], [NXa, HZ], [NXa, NZa], [HX, NZa], [HX, -HZ], [-HX, -HZ]], 0.11);
+    poly([[-HX + T2, HZ - T2], [NXa - T2, HZ - T2], [NXa - T2, NZa - T2], [HX - T2, NZa - T2], [HX - T2, -HZ + T2], [-HX + T2, -HZ + T2]], 0.06);
+    poly([[7.0, 3.3], [HX, 3.3], [HX, HZ], [7.0, HZ]], 0.06);
+    pline(-HX, HZ + 1.5, HX, HZ + 1.5, 0.04); pline(-HX - 1.5, -HZ, -HX - 1.5, HZ, 0.04);
+    for (const x of [-HX, HX]) pline(x, HZ + 1.15, x, HZ + 1.85, 0.04);
+    for (const z of [-HZ, HZ]) pline(-HX - 1.15, z, -HX - 1.85, z, 0.04);
+    const fillMat = new THREE.MeshBasicMaterial({ color: lin('#1b1c1e'), transparent: true, opacity: 0, depthWrite: false });
+    for (const [x0, z0, x1, z1] of [[-HX, -HZ, HX, NZa], [-HX, NZa, NXa, HZ]]) {   // заливка пятна дома
+      const f = new THREE.Mesh(new THREE.PlaneGeometry(x1 - x0, z1 - z0).rotateX(-Math.PI / 2), fillMat);
+      f.position.set((x0 + x1) / 2, 0.008, (z0 + z1) / 2); f.renderOrder = 1; planG.add(f);
+    }
+
+    // --- участок 118: отмостка, дорожка к крыльцу с бордюром, фонарики, кусты ---
+    const DX = m2x(7.05), pz0 = HZ + 0.95, pz1 = 10.4;
+    const site118 = new THREE.Group(); site118.visible = false; scene.add(site118);
+    {
+      const AG = G0();
+      const strip = (x0, z0, x1, z1) => {                                // отмостка плитами по 1,5 м
+        const alongX = x1 - x0 > z1 - z0, a0 = alongX ? x0 : z0, a1 = alongX ? x1 : z1;
+        for (let s = a0; s < a1 - 0.05; s += 1.5) {
+          const e = Math.min(a1, s + 1.5) - 0.012;
+          if (alongX) pushBox(AG, s, 0, z0, e, 0.06, z1, 0.8); else pushBox(AG, x0, 0, s, x1, 0.06, e, 0.8);
+        }
+      };
+      strip(-HX - 0.84, HZ + 0.04, HX + 0.84, HZ + 0.84); strip(-HX - 0.84, -HZ - 0.84, HX + 0.84, -HZ - 0.04);
+      strip(-HX - 0.84, -HZ - 0.04, -HX - 0.04, HZ + 0.04); strip(HX + 0.04, -HZ - 0.04, HX + 0.84, HZ + 0.04);
+      const apron = new THREE.Mesh(geoFrom(AG), pbr(TX.concrete, '#c3c0b9')); apron.receiveShadow = true; site118.add(apron);
+      const KG = G0();
+      for (const sx of [-1, 1]) pushBox(KG, DX + sx * 0.8 - (sx > 0 ? 0 : 0.08), 0, pz0, DX + sx * 0.8 + (sx > 0 ? 0.08 : 0), 0.09, pz1, 0.8);
+      const kerb = new THREE.Mesh(geoFrom(KG), pbr(TX.concrete, '#9e9a93')); kerb.castShadow = true; kerb.receiveShadow = true; site118.add(kerb);
+    }
+    const pv118 = [], rr = mulberry(118);
+    {
+      const pw = 0.2, pd = 0.1, j = 0.004, tone = [lin('#9a958d'), lin('#8a857e'), lin('#6e6a65'), lin('#a6a198')];
+      let row = 0;
+      for (let z = pz0; z < pz1 - pd; z += pd + j, row++) {
+        const off = (row % 2) * (pw + j) / 2;
+        for (let x = DX - 0.8 - off; x < DX + 0.8; x += pw + j) {
+          const a = Math.max(x, DX - 0.8), b = Math.min(x + pw, DX + 0.8);
+          if (b - a < 0.04) continue;
+          pv118.push({ x: (a + b) / 2, y: 0.03, z: z + pd / 2, yaw: (rr() - 0.5) * 0.01, sx: (b - a) / pw, t: row * 0.9 + rr() * 0.6, uv: [rr() * 4, rr() * 4], col: tone[Math.floor(rr() * tone.length)].clone() });
+        }
+      }
+    }
+    const pc118 = u(-1), PV_ROWS = Math.ceil((pz1 - pz0) / 0.104);
+    const paver118 = instanced(chamferBox(0.2, 0.06, 0.1, 0.006, 2), masonryMat(TX.concrete, '#ffffff', pc118, 'paver118', 0.4, { noAO: true }), pv118, false);
+    paver118.visible = false;
+    const bol118 = [];
+    {
+      const capMat = new THREE.MeshStandardMaterial({ color: lin('#f6efe2'), emissive: lin('#ffbe78'), emissiveIntensity: 0, roughness: 0.35 });
+      const postMat = new THREE.MeshStandardMaterial({ color: lin('#2a2e32'), roughness: 0.42, metalness: 0.35, envMapIntensity: 0.9 });
+      for (const z of [pz0 + 1.2, pz0 + 3.7]) for (const sx of [-1, 1]) {
+        const b = new THREE.Group(); b.position.set(DX + sx * 1.15, 0, z);
+        const post = new THREE.Mesh(new THREE.CylinderGeometry(0.055, 0.06, 0.55, 16), postMat); post.position.y = 0.275; post.castShadow = true; b.add(post);
+        const head = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.05, 0.06, 16), capMat); head.position.y = 0.5; b.add(head);
+        b.scale.setScalar(1e-3); b.visible = false; scene.add(b);
+        bol118.push({ g: b, capMat });
+      }
+    }
+    const bush118 = [[-6.3, 5.75, 0.6], [-4.8, 5.95, 0.5], [1.9, 5.7, 0.55], [3.3, 5.9, 0.45], [9.55, 1.9, 0.55], [9.45, 0.55, 0.45]].map(([x, z, s], i) => {
+      const b = leafTree({ h: s * 1.6, r: s, ry: s * 0.75, seed: 180 + i, mats: MATS.bush, bark: barkMat, n: 170, size: 0.36, light: BUSH_L, dark: BUSH_D, trunkR: 0.02 });
+      b.position.set(x, 0, z); b.rotation.y = i * 1.3; b.scale.setScalar(1e-3); b.visible = false; scene.add(b);
+      return b;
+    });
+
     // --- палитры и появление ---
     const COLS = ['brick', 'wood', 'band', 'roof', 'frame'];
     const cur = {}, tgt = {};
@@ -2039,13 +2126,25 @@ void main(){
       stats: { area: '118,10 м²', bricks: Math.round(((2 * (2 * HX + 2 * HZ)) * WH * 0.55 + HZ * HZ * tanP * 2) * 51.3), roof: Math.round(ROOF_A), wins: nWin },
       bounds: { x0: xA - 1.5, x1: xB + 1.5, z0: -zE - 1.5, z1: zE + 2.2, y1: yR + 1.5 },
       setPalette(i) { pal = ((i % PAL.length) + PAL.length) % PAL.length; Object.assign(tgt, palColors(PAL[pal])); },
+      lamps: bol118.map((b) => b.g.position),
+      // r: 0…0,25 чертёж · 0,3…0,45 фундамент · 0,45…0,85 стены и кровля · 0,82…1 участок; чертёж гаснет к 0,6
       update(dt, L, r) {
         const k = 1 - Math.exp(-dt * 3.2);
         for (const c of COLS) cur[c].lerp(tgt[c], k);
         syncCols();
         M.glass.emissiveIntensity = L * 0.18;
-        g.visible = r > 0.001;
-        U.clip118.value = r >= 0.999 ? 99 : lerp(-0.3, yR + 0.4, r);
+        const kd = clamp(r / 0.25), pa = clamp(r / 0.04) * (1 - seg(r, 0.45, 0.6));
+        planG.visible = pa > 0.003; planMat.opacity = pa * 0.85; fillMat.opacity = pa * seg(r, 0.12, 0.3) * 0.16;
+        if (planG.visible) plan.forEach((l, i) => { const t = clamp((kd - 0.7 * i / plan.length) / 0.3); l.m.scale.x = Math.max(1e-3, l.len * easeOut(t)); });
+        const kf = seg(r, 0.3, 0.45), kw = seg(r, 0.45, 0.85);
+        g.visible = kf > 0;                                                 // фундамент дорастает чуть выше пола — светится только край
+        U.clip118.value = r >= 0.999 ? 99 : kw > 0 ? lerp(Y0 + 0.13, yR + 0.4, easeIO(kw)) : lerp(-0.05, Y0 + 0.13, easeOut(kf));
+        const ks = seg(r, 0.82, 1);
+        site118.visible = ks > 0; site118.position.y = -0.12 * (1 - easeOut(ks));
+        paver118.visible = ks > 0; pc118.value = ks * (PV_ROWS + 4) - 1;
+        bol118.forEach((b, i) => { const q = clamp((ks - 0.4 - i * 0.1) / 0.3); b.g.visible = q > 0; b.g.scale.setScalar(Math.max(1e-3, backOut(q))); b.capMat.emissiveIntensity = L * 2.5; });
+        bush118.forEach((b, i) => { const q = clamp((ks - 0.15 - i * 0.08) / 0.4); b.visible = q > 0; b.scale.setScalar(Math.max(1e-3, backOut(q))); });
+        return ks;
       },
     };
   })();
@@ -2069,6 +2168,7 @@ void main(){
       { id: '118', name: 'Дом 118 м²', palettes: H118.PAL.map((v) => ({ name: v.name, b: v.brick, r: v.wood })) },
     ],
     get house() { return houseTo; },
+    get busy() { return hsT0 !== -1; },
     get current() { return houseTo === 1 ? H118.pal : (varT0 === -1 ? varCur : varNext); },
     setHouse,
     setVariant(i) { if (houseTo === 1) H118.setPalette(i); else setVariant101(i); document.dispatchEvent(new CustomEvent('bd:variant', { detail: i })); },
@@ -2094,7 +2194,10 @@ void main(){
     if (t0 < 0) t0 = now;
     const draw = (REDUCED || forcedP !== null) ? 1 : clamp((now - t0 - 250) / 2900);
     apply(p, draw, now, ps);
-    H118.update(dt, U.lights.value, r118eff);
+    const ks118 = H118.update(dt, U.lights.value, r118eff);
+    const kF101 = sg(p, 'fin');
+    if (ks118 > 0.5) { H118.lamps.forEach((v, i) => U.lamps.value[i].set(v.x, 0, v.z)); U.lampK.value = ks118; }
+    else { LAMPS101.forEach((v, i) => U.lamps.value[i].copy(v)); U.lampK.value = kF101; }
     const sk = p + r118eff * 3.1 + ps * 0.37;
     if (sk !== shadowP) { renderer.shadowMap.needsUpdate = true; shadowP = sk; }
     renderer.render(scene, camera);
